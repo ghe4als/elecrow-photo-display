@@ -1,0 +1,12 @@
+{
+    "editor.formatOnSave": false,
+    "C_Cpp.default.configurationProvider": "platformio.platformio",
+    "files.associations": {
+        "*.ini": "ini"
+    },
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.python"
+    },
+    "platformio-ide.useBuiltinPython": true,
+    "platformio-ide.useBuiltinPlatformIOCore": true
+}

@@ -1,0 +1,6 @@
+.pio/
+.pio
+.vscode/ipch/
+*.log
+.DS_Store
+build/

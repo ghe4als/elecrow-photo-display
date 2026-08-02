@@ -1,0 +1,54 @@
+#include <unity.h>
+#include "starter.h"
+
+void setUp(void) {}
+void tearDown(void) {}
+
+static void test_add_basic(void) {
+    TEST_ASSERT_EQUAL_INT32(0, starter::add(0, 0));
+    TEST_ASSERT_EQUAL_INT32(5, starter::add(2, 3));
+    TEST_ASSERT_EQUAL_INT32(-1, starter::add(2, -3));
+}
+
+static void test_add_overflow(void) {
+    TEST_ASSERT_EQUAL_INT32(INT32_MAX, starter::add(INT32_MAX, 0));
+}
+
+static void test_mapClamp_midpoint(void) {
+    // 0..1023 -> 0..255, midpoint 512. Integer math truncates: 512*255/1023 = 127.
+    TEST_ASSERT_EQUAL_INT32(127, starter::mapClamp(512, 0, 1023, 0, 255));
+    // exact endpoint values must hit the output endpoints exactly:
+    TEST_ASSERT_EQUAL_INT32(0,   starter::mapClamp(0,   0, 1023, 0, 255));
+    TEST_ASSERT_EQUAL_INT32(255, starter::mapClamp(1023,0, 1023, 0, 255));
+}
+
+static void test_mapClamp_clamps_below(void) {
+    TEST_ASSERT_EQUAL_INT32(0, starter::mapClamp(-100, 0, 1023, 0, 255));
+}
+
+static void test_mapClamp_clamps_above(void) {
+    TEST_ASSERT_EQUAL_INT32(255, starter::mapClamp(5000, 0, 1023, 0, 255));
+}
+
+static void test_mapClamp_inverted_range(void) {
+    // output reversed: 0..1023 -> 255..0
+    TEST_ASSERT_EQUAL_INT32(255, starter::mapClamp(0, 0, 1023, 255, 0));
+    TEST_ASSERT_EQUAL_INT32(0,   starter::mapClamp(1023, 0, 1023, 255, 0));
+}
+
+static void test_mapClamp_degenerate(void) {
+    // inMin==inMax must not divide by zero
+    TEST_ASSERT_EQUAL_INT32(42, starter::mapClamp(7, 5, 5, 42, 99));
+}
+
+int main(int argc, char** argv) {
+    UNITY_BEGIN();
+    RUN_TEST(test_add_basic);
+    RUN_TEST(test_add_overflow);
+    RUN_TEST(test_mapClamp_midpoint);
+    RUN_TEST(test_mapClamp_clamps_below);
+    RUN_TEST(test_mapClamp_clamps_above);
+    RUN_TEST(test_mapClamp_inverted_range);
+    RUN_TEST(test_mapClamp_degenerate);
+    return UNITY_END();
+}
