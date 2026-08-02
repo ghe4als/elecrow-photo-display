@@ -4,3 +4,6 @@
 *.log
 .DS_Store
 build/
+
+# Vendored from the Elecrow example repo by scripts/setup_crowpanel.py
+lib/LovyanGFX/
