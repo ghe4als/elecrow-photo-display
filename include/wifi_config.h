@@ -1,6 +1,8 @@
-// WiFi credentials placeholder.
-// Edit these values (or set the WIFI_SSID / WIFI_PASS environment variables
-// before building). Do NOT commit real credentials.
+// WiFi credentials fallback.
+// Real credentials live in .env (gitignored) and are injected as -D flags
+// by scripts/load_env.py. See .env.example. This file is just the fallback
+// for when no creds are configured; the firmware skips WiFi if it sees
+// CHANGE_ME.
 #ifndef WIFI_CONFIG_H
 #define WIFI_CONFIG_H
 
