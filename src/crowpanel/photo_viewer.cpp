@@ -11,14 +11,27 @@ constexpr uint16_t SCREEN_W = 800;
 constexpr uint16_t SCREEN_H = 480;
 constexpr int SCALE_NONE = 256;
 
+constexpr int16_t SWIPE_THRESHOLD_PX = 60;
+constexpr int16_t SWIPE_MAX_VERTICAL_DRIFT_PX = 80;
+constexpr uint32_t TAP_MAX_DURATION_MS = 400;
+constexpr uint32_t SWIPE_MAX_DURATION_MS = 500;
+
 String g_photos[MAX_PHOTOS];
 int g_photo_count = 0;
 int g_current_index = 0;
 bool g_paused = false;
 uint32_t g_last_advance_ms = 0;
 
+lv_obj_t* g_screen = nullptr;
 lv_obj_t* g_image = nullptr;
 lv_obj_t* g_index_label = nullptr;
+lv_obj_t* g_pause_label = nullptr;
+
+enum class TouchState { IDLE, PRESSED };
+TouchState g_touch_state = TouchState::IDLE;
+int16_t g_touch_start_x = 0;
+int16_t g_touch_start_y = 0;
+uint32_t g_touch_start_ms = 0;
 
 void load_photo(int index)
 {
@@ -59,6 +72,18 @@ void load_photo(int index)
     }
 }
 
+void update_pause_overlay()
+{
+    if (!g_pause_label) {
+        return;
+    }
+    if (g_paused) {
+        lv_obj_clear_flag(g_pause_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(g_pause_label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void advance_photo(int delta)
 {
     if (g_photo_count == 0) {
@@ -73,6 +98,53 @@ void advance_photo(int delta)
     load_photo(next);
 }
 
+void on_press(const lv_indev_t* indev)
+{
+    lv_point_t vect;
+    lv_indev_get_vect(indev, &vect);
+    if (abs(vect.x) > 2 || abs(vect.y) > 2) {
+        return;
+    }
+    lv_point_t pos;
+    lv_indev_get_point(indev, &pos);
+    g_touch_start_x = pos.x;
+    g_touch_start_y = pos.y;
+    g_touch_start_ms = millis();
+    g_touch_state = TouchState::PRESSED;
+}
+
+void on_release(const lv_indev_t* indev)
+{
+    if (g_touch_state != TouchState::PRESSED) {
+        return;
+    }
+    g_touch_state = TouchState::IDLE;
+
+    lv_point_t pos;
+    lv_indev_get_point(indev, &pos);
+    const int16_t dx = pos.x - g_touch_start_x;
+    const int16_t dy = pos.y - g_touch_start_y;
+    const uint32_t elapsed = millis() - g_touch_start_ms;
+
+    if (elapsed <= SWIPE_MAX_DURATION_MS && abs(dx) >= SWIPE_THRESHOLD_PX && abs(dy) <= SWIPE_MAX_VERTICAL_DRIFT_PX) {
+        if (dx > 0) {
+            Serial.println("[touch] swipe right -> previous");
+            photo_viewer_previous();
+        } else {
+            Serial.println("[touch] swipe left -> next");
+            photo_viewer_next();
+        }
+        return;
+    }
+
+    if (elapsed <= TAP_MAX_DURATION_MS && abs(dx) < SWIPE_THRESHOLD_PX && abs(dy) < SWIPE_THRESHOLD_PX) {
+        Serial.println("[touch] tap -> toggle pause");
+        photo_viewer_toggle_pause();
+        update_pause_overlay();
+        return;
+    }
+}
+
 } // namespace
 
 bool init_photo_viewer()
@@ -80,35 +152,48 @@ bool init_photo_viewer()
     g_photo_count = list_photo_files("/photos", g_photos, MAX_PHOTOS);
     Serial.printf("[photo] found %d photo(s) in /photos\n", g_photo_count);
 
-    lv_obj_t* screen = lv_obj_create(nullptr);
-    lv_obj_set_size(screen, SCREEN_W, SCREEN_H);
-    lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
-    lv_screen_load(screen);
+    g_screen = lv_obj_create(nullptr);
+    lv_obj_set_size(g_screen, SCREEN_W, SCREEN_H);
+    lv_obj_set_style_bg_color(g_screen, lv_color_black(), LV_PART_MAIN);
+    lv_screen_load(g_screen);
 
     if (g_photo_count <= 0) {
-        lv_obj_t* label = lv_label_create(screen);
+        lv_obj_t* label = lv_label_create(g_screen);
         lv_label_set_text(label, "No photos in /photos");
         lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
         lv_obj_center(label);
         return false;
     }
 
-    g_image = lv_image_create(screen);
+    g_image = lv_image_create(g_screen);
     lv_obj_set_size(g_image, SCREEN_W, SCREEN_H);
     lv_obj_set_pos(g_image, 0, 0);
     lv_image_set_inner_align(g_image, LV_IMAGE_ALIGN_CENTER);
     lv_image_set_antialias(g_image, true);
 
-    g_index_label = lv_label_create(screen);
+    g_index_label = lv_label_create(g_screen);
     lv_obj_set_style_text_color(g_index_label, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_bg_color(g_index_label, lv_color_hex(0x202020), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(g_index_label, LV_OPA_70, LV_PART_MAIN);
     lv_obj_set_style_pad_all(g_index_label, 4, LV_PART_MAIN);
     lv_obj_align(g_index_label, LV_ALIGN_BOTTOM_RIGHT, -8, -8);
 
+    g_pause_label = lv_label_create(g_screen);
+    lv_label_set_text(g_pause_label, LV_SYMBOL_PAUSE " PAUSED");
+    lv_obj_set_style_text_color(g_pause_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(g_pause_label, lv_color_hex(0x202020), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(g_pause_label, LV_OPA_70, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(g_pause_label, 8, LV_PART_MAIN);
+    lv_obj_align(g_pause_label, LV_ALIGN_TOP_MID, 0, 16);
+    lv_obj_add_flag(g_pause_label, LV_OBJ_FLAG_HIDDEN);
+
     g_current_index = -1;
     g_last_advance_ms = millis();
+    g_touch_state = TouchState::IDLE;
     load_photo(0);
+
+    lv_obj_add_event_cb(g_screen, photo_viewer_handle_event, LV_EVENT_PRESSED, nullptr);
+    lv_obj_add_event_cb(g_screen, photo_viewer_handle_event, LV_EVENT_RELEASED, nullptr);
     return true;
 }
 
@@ -138,6 +223,16 @@ bool photo_viewer_is_paused()
 int photo_viewer_count()
 {
     return g_photo_count;
+}
+
+void photo_viewer_handle_event(lv_event_t* event)
+{
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED) {
+        on_press(lv_indev_active());
+    } else if (code == LV_EVENT_RELEASED) {
+        on_release(lv_indev_active());
+    }
 }
 
 void photo_viewer_tick()

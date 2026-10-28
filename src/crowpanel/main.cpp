@@ -214,15 +214,6 @@ void setup()
 
     ui_init(set_led);
 
-    // Small status label top-left for WiFi IP / offline state.
-    ip_label = lv_label_create(lv_screen_active());
-    lv_obj_set_style_text_color(ip_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(ip_label, lv_color_hex(0x202020), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(ip_label, 180, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(ip_label, 4, LV_PART_MAIN);
-    lv_label_set_text(ip_label, "WiFi ...");
-    lv_obj_align(ip_label, LV_ALIGN_TOP_LEFT, 8, 8);
-
     connect_wifi();
 
     // Mount the SD card and register its LVGL file-system driver.
