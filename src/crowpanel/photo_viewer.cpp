@@ -2,6 +2,7 @@
 
 #include <lvgl.h>
 #include "crowpanel/sdcard.h"
+#include "crowpanel/display_power.h"
 
 namespace crowpanel {
 
@@ -62,9 +63,11 @@ void load_photo(int index)
         const int32_t scale_y = (int32_t)SCREEN_H * SCALE_NONE / header.h;
         const int32_t scale = (scale_x < scale_y) ? scale_x : scale_y;
         lv_image_set_scale(g_image, (uint32_t)scale);
-        Serial.printf("[photo] scale %d\n", scale);
+        lv_image_set_rotation(g_image, 0);
+        Serial.printf("[photo] header %dx%d scale %d\n", header.w, header.h, scale);
     } else {
         lv_image_set_scale(g_image, SCALE_NONE);
+        lv_image_set_rotation(g_image, 0);
     }
 
     if (g_index_label) {
@@ -141,6 +144,12 @@ void on_release(const lv_indev_t* indev)
         Serial.println("[touch] tap -> toggle pause");
         photo_viewer_toggle_pause();
         update_pause_overlay();
+        return;
+    }
+
+    if (elapsed > TAP_MAX_DURATION_MS && abs(dx) < SWIPE_THRESHOLD_PX && abs(dy) < SWIPE_THRESHOLD_PX) {
+        Serial.println("[touch] long press -> test backlight off");
+        display_power_test_off(5000);
         return;
     }
 }

@@ -11,6 +11,7 @@
 #include "crowpanel/ui.h"
 #include "crowpanel/sdcard.h"
 #include "crowpanel/photo_viewer.h"
+#include "crowpanel/display_power.h"
 
 /*---------------------------------------------------------------
  * PlatformIO RGB/LVGL application
@@ -98,6 +99,7 @@ void touch_read(lv_indev_t *, lv_indev_data_t * data)
     // Log only the transition into a press to avoid flooding the serial port.
     if (pressed && !was_pressed) {
         Serial.printf("Touch %d,%d\n", last_x, last_y);
+        crowpanel::display_power_reset_activity();
     }
     was_pressed = pressed;
 }
@@ -119,13 +121,15 @@ TaskHandle_t ui_task_handle = nullptr;
  *  Decoding 800x480 JPEGs inside the Arduino loopTask overflows the default
  *  ~8 KB stack, so all rendering and photo loading runs here instead.
  */
-void ui_task(void*)
+    void ui_task(void*)
 {
     crowpanel::init_photo_viewer();
+    crowpanel::display_power_init();
 
     for (;;) {
         lv_timer_handler();
         crowpanel::photo_viewer_tick();
+        crowpanel::display_power_tick();
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
