@@ -87,6 +87,20 @@ void update_pause_overlay()
     }
 }
 
+void shuffle_photos()
+{
+    if (g_photo_count <= 1) {
+        return;
+    }
+    randomSeed(esp_random());
+    for (int i = g_photo_count - 1; i > 0; --i) {
+        const int j = random(i + 1);
+        const String tmp = g_photos[i];
+        g_photos[i] = g_photos[j];
+        g_photos[j] = tmp;
+    }
+}
+
 void advance_photo(int delta)
 {
     if (g_photo_count == 0) {
@@ -160,6 +174,11 @@ bool init_photo_viewer()
 {
     g_photo_count = list_photo_files("/photos", g_photos, MAX_PHOTOS);
     Serial.printf("[photo] found %d photo(s) in /photos\n", g_photo_count);
+
+    if (g_photo_count > 0) {
+        shuffle_photos();
+        Serial.println("[photo] shuffled photo order");
+    }
 
     g_screen = lv_obj_create(nullptr);
     lv_obj_set_size(g_screen, SCREEN_W, SCREEN_H);

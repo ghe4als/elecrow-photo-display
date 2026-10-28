@@ -116,6 +116,13 @@ def main() -> int:
         help="Path to the mounted SD card (default: /Volumes/SDCARD)",
     )
     parser.add_argument(
+        "sd_positional",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="Path to the mounted SD card (positional alternative to --sd)",
+    )
+    parser.add_argument(
         "--upload-dir",
         type=Path,
         default=None,
@@ -146,8 +153,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    upload_dir = args.upload_dir or args.sd / "upload"
-    photos_dir = args.photos_dir or args.sd / "photos"
+    sd = args.sd_positional or args.sd
+
+    upload_dir = args.upload_dir or sd / "upload"
+    photos_dir = args.photos_dir or sd / "photos"
 
     if not upload_dir.is_dir():
         print(f"Source folder not found: {upload_dir}")
@@ -177,7 +186,7 @@ def main() -> int:
     print(f"Source: {upload_dir}")
 
     if not args.no_eject:
-        eject_volume(args.sd)
+        eject_volume(sd)
 
     return 0
 
