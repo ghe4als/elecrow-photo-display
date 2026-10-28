@@ -12,15 +12,15 @@
 #include "crowpanel/sdcard.h"
 #include "crowpanel/photo_viewer.h"
 #include "crowpanel/display_power.h"
-#include "crowpanel/display.h"
 
 /*---------------------------------------------------------------
  * PlatformIO RGB/LVGL application
  * Configure the 800x480 panel, sensor, touch input, and generated UI.
  *--------------------------------------------------------------*/
 namespace {
-constexpr uint16_t screen_width = crowpanel::display_width;
-constexpr uint16_t screen_height = crowpanel::display_height;
+// These values bind LVGL and the application outputs to the 5.0-inch board.
+constexpr uint16_t screen_width = 800;
+constexpr uint16_t screen_height = 480;
 constexpr uint8_t backlight_pin = 2;
 constexpr uint8_t led_pin = 38;
 
@@ -55,12 +55,12 @@ public:
         bus_config.pclk_idle_high = 0;
         bus.config(bus_config);
 
+        // Keep the frame-buffer geometry equal to the physical panel size.
         auto panel_config = panel.config();
-        panel_config.memory_width = crowpanel::panel_width;
-        panel_config.memory_height = crowpanel::panel_height;
-        panel_config.panel_width = crowpanel::panel_width;
-        panel_config.panel_height = crowpanel::panel_height;
-        panel_config.offset_rotation = 1;
+        panel_config.memory_width = screen_width;
+        panel_config.memory_height = screen_height;
+        panel_config.panel_width = screen_width;
+        panel_config.panel_height = screen_height;
         panel.config(panel_config);
         panel.setBus(&bus);
         setPanel(&panel);
@@ -208,7 +208,7 @@ void setup()
     lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
     lv_display_set_flush_cb(display, display_flush);
     lv_display_set_buffers(display, frame_buffer_0, frame_buffer_1,
-                           crowpanel::panel_width * crowpanel::panel_height * sizeof(lv_color_t),
+                           screen_width * screen_height * sizeof(lv_color_t),
                            LV_DISPLAY_RENDER_MODE_FULL);
 
     // Register GT911 as LVGL's pointer source for generated UI widgets.

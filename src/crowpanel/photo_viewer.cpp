@@ -3,14 +3,13 @@
 #include <lvgl.h>
 #include "crowpanel/sdcard.h"
 #include "crowpanel/display_power.h"
-#include "crowpanel/display.h"
 
 namespace crowpanel {
 
 namespace {
 
-constexpr uint16_t SCREEN_W = display_width;
-constexpr uint16_t SCREEN_H = display_height;
+constexpr uint16_t SCREEN_W = 800;
+constexpr uint16_t SCREEN_H = 480;
 constexpr int SCALE_NONE = 256;
 
 constexpr int16_t SWIPE_THRESHOLD_PX = 60;
@@ -79,22 +78,12 @@ void load_photo_now(int index)
     lv_image_set_src(g_image, path.c_str());
 
     if (header.w > 0 && header.h > 0) {
-        int32_t img_w = header.w;
-        int32_t img_h = header.h;
-        int32_t rotation = 0;
-        if (img_w > img_h) {
-            rotation = 900;
-            const int32_t tmp = img_w;
-            img_w = img_h;
-            img_h = tmp;
-            Serial.println("[photo] landscape source -> rotating 90");
-        }
-        const int32_t scale_x = (int32_t)SCREEN_W * SCALE_NONE / img_w;
-        const int32_t scale_y = (int32_t)SCREEN_H * SCALE_NONE / img_h;
+        const int32_t scale_x = (int32_t)SCREEN_W * SCALE_NONE / header.w;
+        const int32_t scale_y = (int32_t)SCREEN_H * SCALE_NONE / header.h;
         const int32_t scale = (scale_x < scale_y) ? scale_x : scale_y;
         lv_image_set_scale(g_image, (uint32_t)scale);
-        lv_image_set_rotation(g_image, rotation);
-        Serial.printf("[photo] effective %dx%d scale %d rotation %d\n", img_w, img_h, scale, rotation);
+        lv_image_set_rotation(g_image, 0);
+        Serial.printf("[photo] header %dx%d scale %d\n", header.w, header.h, scale);
     } else {
         lv_image_set_scale(g_image, SCALE_NONE);
         lv_image_set_rotation(g_image, 0);
