@@ -39,6 +39,15 @@ def run_sips_convert(src: Path, dst: Path, fmt: str) -> bool:
     return True
 
 
+def read_exif_orientation(src: Path) -> int:
+    try:
+        from PIL import Image
+        with Image.open(src) as img:
+            return img.getexif().get(274, 1)
+    except Exception:
+        return 1
+
+
 def prepare_with_pillow(src: Path, dst: Path, width: int, height: int) -> bool:
     try:
         from PIL import Image, ImageOps
@@ -46,6 +55,9 @@ def prepare_with_pillow(src: Path, dst: Path, width: int, height: int) -> bool:
         print("Pillow is required to handle EXIF orientation correctly.")
         print("Install it with: pip install Pillow")
         raise SystemExit(exc)
+
+    orientation = read_exif_orientation(src)
+    print(f"  EXIF orientation tag: {orientation}")
 
     try:
         with Image.open(src) as img:
