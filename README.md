@@ -262,6 +262,60 @@ won't use, and start coding in `src/main.cpp`.
 | Native tests fail to compile | Make sure new helpers in `src/` don't include `Arduino.h` or ESP-IDF headers |
 | Flash size mismatch on IDF env | Edit `sdkconfig.defaults` or run `pio run -e esp32dev-idf -t menuconfig` |
 
+## Photo sync workflow (Google Drive host sync)
+
+This project includes a host-side Google Drive sync option. It is the simplest
+reliable path because phone photos must be resized and converted to baseline
+JPEGs before the ESP32 can display them. The conversion happens on your Mac,
+not on the device.
+
+Prerequisites:
+
+1. A Google Cloud project with the Google Drive API enabled.
+2. An OAuth 2.0 **Desktop app** credential downloaded as
+   `client_secret_*.json`.
+3. Python packages:
+   ```sh
+   pip install google-auth-oauthlib google-api-python-client
+   ```
+
+One-time authentication:
+
+```sh
+python3 scripts/gdrive_auth.py
+```
+
+This opens a browser flow and saves `gdrive_refresh_token.json` in the project
+root. Keep both credential files secret and do not commit them (they are
+already ignored by `.gitignore`).
+
+Day-to-day sync (insert the SD card first):
+
+```sh
+python3 scripts/gdrive_sync.py \
+  --folder-id 1M1MkkdQ9vKmXTkDvweV3kmGRKdZQtoU_ \
+  --sd-mount /Volumes/SDCARD
+```
+
+The script downloads new images from the Drive folder to `SDCARD/upload/`, then
+runs `prepare_photos.py` to convert them to 800×480 baseline JPEGs in
+`SDCARD/photos/`. The SD card is ejected automatically; add `--no-eject` to
+keep it mounted.
+
+To preview what would be downloaded without writing anything:
+
+```sh
+python3 scripts/gdrive_sync.py \
+  --folder-id 1M1MkkdQ9vKmXTkDvweV3kmGRKdZQtoU_ \
+  --sd-mount /Volumes/SDCARD \
+  --dry-run
+```
+
+For fully automatic “upload from anywhere” sync without a local computer, a
+future option is a small cloud proxy (for example a Cloudflare Worker) that
+reads the Drive folder, prepares the images, and exposes simple HTTPS
+endpoints the frame can poll directly.
+
 ## Versions this starter was verified with
 
 - PlatformIO Core 6.1.19

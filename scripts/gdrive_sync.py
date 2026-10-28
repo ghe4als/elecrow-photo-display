@@ -8,8 +8,8 @@ staging directory, then processed by prepare_photos.py so they are resized to
 
 import argparse
 import json
-import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -106,6 +106,11 @@ def main():
         action="store_true",
         help="List what would be downloaded without writing anything.",
     )
+    parser.add_argument(
+        "--no-eject",
+        action="store_true",
+        help="Keep the SD card mounted after processing (default: eject).",
+    )
     args = parser.parse_args()
 
     sd_mount = Path(args.sd_mount)
@@ -139,11 +144,23 @@ def main():
             shutil.copy2(dest, upload_dir / f["name"])
 
     prepare_script = Path(__file__).with_name("prepare_photos.py")
-    if prepare_script.exists():
-        print("Running prepare_photos.py ...")
-        os.system(f'"{sys.executable}" "{prepare_script}" "{sd_mount}"')
-    else:
+    if not prepare_script.exists():
         print(f"prepare_photos.py not found at {prepare_script}; leaving files in upload/")
+        print("Sync complete.")
+        return
+
+    print("Running prepare_photos.py ...")
+    cmd = [
+        sys.executable,
+        str(prepare_script),
+        str(sd_mount),
+    ]
+    if args.no_eject:
+        cmd.append("--no-eject")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print("prepare_photos.py failed.")
+        sys.exit(result.returncode)
 
     print("Sync complete.")
 
