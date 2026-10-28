@@ -104,10 +104,10 @@ def prepare_photo(src: Path, dst: Path, width: int, height: int) -> bool:
     tmp_dir = tempfile.mkdtemp(prefix="crowpanel-photo-")
     try:
         if src.suffix.lower() in {".heic", ".heif"}:
-            png_tmp = Path(tmp_dir) / "converted.png"
-            if not run_sips_convert(src, png_tmp, "png"):
+            jpeg_tmp = Path(tmp_dir) / "converted.jpg"
+            if not run_sips_convert(src, jpeg_tmp, "jpeg"):
                 return False
-            src_to_process = png_tmp
+            src_to_process = jpeg_tmp
         else:
             src_to_process = src
 
