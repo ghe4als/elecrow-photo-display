@@ -16,3 +16,10 @@ build/
 
 # Vendored from the Elecrow example repo by scripts/setup_crowpanel.py
 lib/LovyanGFX/
+
+# Google Drive OAuth secrets and tokens - never commit.
+client_secret_*.json
+gdrive_refresh_token.json
+
+# Python bytecode cache.
+scripts/__pycache__/
