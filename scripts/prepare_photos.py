@@ -66,7 +66,7 @@ def prepare_with_pillow(src: Path, dst: Path, width: int, height: int) -> bool:
                 upright = upright.convert("RGB")
 
             if upright.height > upright.width:
-                upright = upright.rotate(90, expand=True)
+                upright = upright.rotate(270, expand=True)
                 print("  pre-rotated portrait source to landscape for portrait-mounted frame")
 
             upright.thumbnail((width, height), Image.Resampling.LANCZOS)
