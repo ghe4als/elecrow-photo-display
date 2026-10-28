@@ -2,6 +2,7 @@
 #include <Wire.h>
 
 #include "crowpanel/touch.h"
+#include "crowpanel/display.h"
 
 /*---------------------------------------------------------------
  * PCA9557 and GT911 low-level access
@@ -103,7 +104,7 @@ void touch_init()
 }
 
 /**
- * @brief Read the first active point and clamp it to the 800x480 panel.
+ * @brief Read the first active point and map it to portrait logical coordinates.
  * @param x Output horizontal coordinate.
  * @param y Output vertical coordinate.
  * @return true when a valid point was decoded; false otherwise.
@@ -111,22 +112,25 @@ void touch_init()
 bool touch_read_point(int16_t & x, int16_t & y)
 {
     uint8_t status;
-    // Bit 7 marks fresh point data; stale frames must not become new presses.
     if (!gt911_read(gt911_point_info, &status, 1) || !(status & 0x80)) {
         return false;
     }
     const uint8_t points = status & 0x0F;
     uint8_t point[7];
     const bool valid = points > 0 && points <= 5 && gt911_read(gt911_first_point, point, sizeof(point));
-    // Acknowledge every fresh frame so GT911 can publish the next sample.
     gt911_clear_status();
     if (!valid) {
         return false;
     }
-    // Decode little-endian coordinates and keep them inside LVGL's bounds.
     const uint16_t raw_x = point[1] | (point[2] << 8);
     const uint16_t raw_y = point[3] | (point[4] << 8);
-    x = constrain(raw_x, 0, 799);
-    y = constrain(raw_y, 0, 479);
+    const int16_t phys_x = constrain(raw_x, 0, crowpanel::panel_width - 1);
+    const int16_t phys_y = constrain(raw_y, 0, crowpanel::panel_height - 1);
+
+    x = phys_y;
+    y = (crowpanel::panel_width - 1) - phys_x;
+
+    x = constrain(x, 0, crowpanel::display_width - 1);
+    y = constrain(y, 0, crowpanel::display_height - 1);
     return true;
 }
