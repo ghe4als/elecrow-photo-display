@@ -64,6 +64,11 @@ def prepare_with_pillow(src: Path, dst: Path, width: int, height: int) -> bool:
             upright = ImageOps.exif_transpose(img)
             if upright.mode in ("RGBA", "P"):
                 upright = upright.convert("RGB")
+
+            if upright.height > upright.width:
+                upright = upright.rotate(90, expand=True)
+                print("  pre-rotated portrait source to landscape for portrait-mounted frame")
+
             upright.thumbnail((width, height), Image.Resampling.LANCZOS)
 
             canvas = Image.new("RGB", (width, height), (0, 0, 0))

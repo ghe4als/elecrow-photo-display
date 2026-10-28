@@ -6,15 +6,24 @@ Mount the CrowPanel 5" HMI V3.0 in portrait orientation (power plug at the botto
 ## Background
 The panel native resolution is 800×480 landscape. Previous attempts to rotate via LovyanGFX `offset_rotation=4` + `setRotation(2)` or LVGL `lv_display_set_rotation` produced a blank/corrupted screen and were reverted. We need a safer approach.
 
-## Proposed approach
-1. **Hardware-level panel rotation via LovyanGFX config.**
-   - Change `panel_width` / `panel_height` in the LovyanGFX setup to swap the active area to 480×800.
-   - Set `offset_rotation` to the value that puts the power connector at the bottom without breaking RGB full-framebuffer flush.
-   - Keep LVGL display size matching the rotated panel (480×800).
+## Results
+- **Attempt 1 (LovyanGFX `offset_rotation=1`):** Reverted. Flashing the firmware produced a screen full of rainbow/vertical color lines instead of an image. The RGB panel driver does not tolerate `offset_rotation` with the full-framebuffer flush path used on this board.
+- **Reversion:** The code was reverted to the known-good landscape configuration and the device was reflashed successfully. It is back to the working state.
 
-2. **LVGL display rotation as fallback.**
-   - If LovyanGFX rotation still blanks the screen, use LVGL `lv_display_set_rotation` on a 800×480 display and render into a rotated framebuffer.
-   - This is less efficient but was partially attempted before; we will isolate variables.
+## Next options to try
+1. **LVGL software rotation on a landscape display.**
+   - Keep LovyanGFX at 800×480 and set `lv_display_set_rotation(LV_DISPLAY_ROTATION_90)`.
+   - LVGL then renders into a rotated framebuffer. The flush callback must account for the rotated buffer layout or rely on LVGL's internal rotation.
+   - Risk: previous attempt with `lv_display_set_rotation` also blanked the screen, but it may have been combined with other changes.
+
+2. **Software rotate each photo at decode time.**
+   - Keep the panel in landscape. For each portrait source, use LVGL `lv_image_set_rotation(900)` to show it upright.
+   - This does not rotate the whole UI (counters, touch mapping), so it only solves the photo orientation, not the physical mounting orientation.
+
+3. **Pre-rotate all photos on the host.**
+   - Keep the panel in landscape. Rotate every portrait photo 90° in `prepare_photos.py` and pad it to 800×480 landscape.
+   - The frame then displays pre-rotated images. Touch and UI stay in landscape.
+   - This is the simplest and safest path if the goal is just to show portrait photos upright on a landscape-mounted panel.
 
 3. **Touch coordinate rotation.**
    - The GT911 touch controller reports coordinates in the panel's native orientation.
