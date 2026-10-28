@@ -57,7 +57,7 @@ def diagnose(src: Path):
         out = tmp_path / "final.jpg"
         if prepare_with_pillow(process_src, out, 800, 480):
             inspect(out, "final 800x480")
-            preview = tmp_path / "preview.jpg"
+            preview = Path("/tmp/crowpanel_diag_preview.jpg")
             shutil.copy2(out, preview)
             print(f"Final saved for inspection: {preview}")
         else:
