@@ -17,6 +17,9 @@ constexpr int16_t SWIPE_MAX_VERTICAL_DRIFT_PX = 80;
 constexpr uint32_t TAP_MAX_DURATION_MS = 400;
 constexpr uint32_t SWIPE_MAX_DURATION_MS = 500;
 
+constexpr uint32_t FADE_DURATION_MS = 350;
+constexpr uint32_t FADE_TICK_MS = 16;
+
 String g_photos[MAX_PHOTOS];
 int g_photo_count = 0;
 int g_current_index = 0;
@@ -34,7 +37,22 @@ int16_t g_touch_start_x = 0;
 int16_t g_touch_start_y = 0;
 uint32_t g_touch_start_ms = 0;
 
-void load_photo(int index)
+enum class FadeState { VISIBLE, FADING_OUT, LOADING, FADING_IN };
+FadeState g_fade_state = FadeState::VISIBLE;
+int g_pending_index = -1;
+uint32_t g_fade_start_ms = 0;
+lv_opa_t g_fade_opa = LV_OPA_COVER;
+
+void apply_opacity()
+{
+    if (!g_image) {
+        return;
+    }
+    lv_obj_set_style_opa(g_image, g_fade_opa, LV_PART_MAIN);
+    lv_obj_set_style_image_opa(g_image, g_fade_opa, LV_PART_MAIN);
+}
+
+void load_photo_now(int index)
 {
     if (g_photo_count == 0 || index < 0 || index >= g_photo_count) {
         return;
@@ -49,6 +67,7 @@ void load_photo(int index)
     if (info != LV_RESULT_OK) {
         Serial.printf("[photo] decoder_get_info failed for %s\n", path.c_str());
         lv_image_set_scale(g_image, SCALE_NONE);
+        apply_opacity();
         if (g_index_label) {
             lv_label_set_text_fmt(g_index_label, "%d / %d (bad file)", index + 1, g_photo_count);
         }
@@ -70,8 +89,62 @@ void load_photo(int index)
         lv_image_set_rotation(g_image, 0);
     }
 
+    apply_opacity();
+
     if (g_index_label) {
         lv_label_set_text_fmt(g_index_label, "%d / %d", index + 1, g_photo_count);
+    }
+}
+
+void load_photo(int index)
+{
+    if (g_photo_count == 0 || index < 0 || index >= g_photo_count) {
+        return;
+    }
+    if (!g_image) {
+        load_photo_now(index);
+        return;
+    }
+    g_pending_index = index;
+    g_fade_state = FadeState::FADING_OUT;
+    g_fade_start_ms = millis();
+    g_fade_opa = LV_OPA_COVER;
+    apply_opacity();
+}
+
+void update_fade()
+{
+    if (g_fade_state == FadeState::VISIBLE) {
+        return;
+    }
+    if (g_fade_state == FadeState::FADING_OUT || g_fade_state == FadeState::FADING_IN) {
+        const uint32_t now = millis();
+        const uint32_t elapsed = now - g_fade_start_ms;
+        const lv_opa_t target = (g_fade_state == FadeState::FADING_OUT) ? LV_OPA_TRANSP : LV_OPA_COVER;
+        const lv_opa_t start = (g_fade_state == FadeState::FADING_OUT) ? LV_OPA_COVER : LV_OPA_TRANSP;
+        if (elapsed >= FADE_DURATION_MS) {
+            g_fade_opa = target;
+        } else {
+            g_fade_opa = static_cast<lv_opa_t>(start + (target - start) * elapsed / FADE_DURATION_MS);
+        }
+        apply_opacity();
+
+        if (elapsed >= FADE_DURATION_MS) {
+            if (g_fade_state == FadeState::FADING_OUT) {
+                g_fade_state = FadeState::LOADING;
+            } else {
+                g_fade_state = FadeState::VISIBLE;
+            }
+        }
+    }
+
+    if (g_fade_state == FadeState::LOADING) {
+        if (g_pending_index >= 0 && g_pending_index < g_photo_count) {
+            load_photo_now(g_pending_index);
+        }
+        g_pending_index = -1;
+        g_fade_state = FadeState::FADING_IN;
+        g_fade_start_ms = millis();
     }
 }
 
@@ -265,6 +338,8 @@ void photo_viewer_handle_event(lv_event_t* event)
 
 void photo_viewer_tick()
 {
+    update_fade();
+
     if (g_paused || g_photo_count == 0) {
         return;
     }
