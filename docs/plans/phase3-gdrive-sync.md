@@ -12,7 +12,7 @@ Sync photos from a private Google Drive shared folder to the SD card `/photos` d
 ## Files to add
 - `scripts/gdrive_auth.py` — OAuth2 desktop-app flow, refresh-token storage.
 - `scripts/gdrive_sync.py` — list, download, and process photos from Drive.
-- Update `scripts/prepare_photos.py` so it can be invoked on a staging directory by `gdrive_sync.py`.
+- Update `scripts/prepare_photos.py` so it can be invoked on a staging directory by `gdrive_sync.py`, and use Pillow to apply EXIF orientation before resizing.
 
 ## Files to edit
 - `.gitignore` — ignore `gdrive_refresh_token.json` and `client_secret_*.json`.

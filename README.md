@@ -276,7 +276,7 @@ Prerequisites:
    `client_secret_*.json`.
 3. Python packages:
    ```sh
-   pip install google-auth-oauthlib google-api-python-client
+   pip install google-auth-oauthlib google-api-python-client Pillow
    ```
 
 One-time authentication:

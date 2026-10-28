@@ -6,7 +6,6 @@ Reads HEIC/JPEG/PNG files from a source folder, resizes them to fit the
 """
 
 import argparse
-import os
 import re
 import shutil
 import subprocess
@@ -25,37 +24,45 @@ def supported(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_INPUT
 
 
-def run_sips(src: Path, dst: Path, width: int, height: int) -> bool:
-    # Convert to a plain sRGB JPEG first (forces baseline, strips HEIC container).
-    tmp_jpg = dst.with_suffix(".tmp.jpg")
-    cmd_convert = [
+def run_sips_convert(src: Path, dst: Path, fmt: str) -> bool:
+    cmd = [
         "sips",
-        "-s", "format", "jpeg",
+        "-s", "format", fmt,
         "-s", "formatOptions", "best",
-        "-s", "profile", "/System/Library/ColorSync/Profiles/sRGB Profile.icc",
-        src,
-        "--out", tmp_jpg,
+        str(src),
+        "--out", str(dst),
     ]
-    result = subprocess.run(cmd_convert, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"sips conversion failed for {src}: {result.stderr}")
         return False
-
-    # Resize to fit inside the target box and pad to exact size with black bars.
-    cmd_resize = [
-        "sips",
-        "-Z", str(max(width, height)),
-        "-p", str(height), str(width),
-        "--padColor", "000000",
-        tmp_jpg,
-        "--out", dst,
-    ]
-    result = subprocess.run(cmd_resize, capture_output=True, text=True)
-    tmp_jpg.unlink(missing_ok=True)
-    if result.returncode != 0:
-        print(f"sips resize failed for {src}: {result.stderr}")
-        return False
     return True
+
+
+def prepare_with_pillow(src: Path, dst: Path, width: int, height: int) -> bool:
+    try:
+        from PIL import Image, ImageOps
+    except ImportError as exc:
+        print("Pillow is required to handle EXIF orientation correctly.")
+        print("Install it with: pip install Pillow")
+        raise SystemExit(exc)
+
+    try:
+        with Image.open(src) as img:
+            upright = ImageOps.exif_transpose(img)
+            if upright.mode in ("RGBA", "P"):
+                upright = upright.convert("RGB")
+            upright.thumbnail((width, height), Image.Resampling.LANCZOS)
+
+            canvas = Image.new("RGB", (width, height), (0, 0, 0))
+            x = (width - upright.width) // 2
+            y = (height - upright.height) // 2
+            canvas.paste(upright, (x, y))
+            canvas.save(dst, "JPEG", quality=92, optimize=True)
+        return True
+    except Exception as e:
+        print(f"Pillow processing failed for {src}: {e}")
+        return False
 
 
 def eject_volume(mount_point: Path) -> None:
@@ -83,26 +90,18 @@ def prepare_photo(src: Path, dst: Path, width: int, height: int) -> bool:
     print(f"Preparing {src.name} ...")
 
     tmp_dir = tempfile.mkdtemp(prefix="crowpanel-photo-")
-    tmp_path = Path(tmp_dir) / f"tmp{src.suffix}"
+    try:
+        if src.suffix.lower() in {".heic", ".heif"}:
+            png_tmp = Path(tmp_dir) / "converted.png"
+            if not run_sips_convert(src, png_tmp, "png"):
+                return False
+            src_to_process = png_tmp
+        else:
+            src_to_process = src
 
-    # Convert to JPEG first if HEIC/HEIF.
-    if src.suffix.lower() in {".heic", ".heif"}:
-        jpeg_tmp = Path(tmp_dir) / "converted.jpg"
-        if not run_sips(src, jpeg_tmp, width, height):
-            shutil.rmtree(tmp_dir)
-            return False
-        tmp_path = jpeg_tmp
-    else:
-        # For input JPEG/PNG, copy then resize below.
-        tmp_path = src
-
-    # Final resize to fit exactly with aspect preservation and padding.
-    if not run_sips(tmp_path, dst, width, height):
-        shutil.rmtree(tmp_dir)
-        return False
-
-    shutil.rmtree(tmp_dir)
-    return True
+        return prepare_with_pillow(src_to_process, dst, width, height)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def main() -> int:
