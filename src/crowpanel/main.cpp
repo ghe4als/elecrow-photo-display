@@ -9,6 +9,8 @@
 #include "wifi_config.h"
 #include "crowpanel/touch.h"
 #include "crowpanel/ui.h"
+#include "crowpanel/sdcard.h"
+#include "crowpanel/photo_viewer.h"
 
 /*---------------------------------------------------------------
  * PlatformIO RGB/LVGL application
@@ -106,6 +108,30 @@ void set_led(bool enabled)
     digitalWrite(led_pin, enabled ? HIGH : LOW);
 }
 
+namespace {
+
+constexpr uint32_t ui_task_stack_words = 16384; // 64 KB (FreeRTOS stack size is in words)
+constexpr UBaseType_t ui_task_priority = 1;
+TaskHandle_t ui_task_handle = nullptr;
+
+/** Dedicated LVGL/photo-viewer task with a generous stack.
+ *
+ *  Decoding 800x480 JPEGs inside the Arduino loopTask overflows the default
+ *  ~8 KB stack, so all rendering and photo loading runs here instead.
+ */
+void ui_task(void*)
+{
+    crowpanel::init_photo_viewer();
+
+    for (;;) {
+        lv_timer_handler();
+        crowpanel::photo_viewer_tick();
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
+}
+
 constexpr uint32_t wifi_timeout_ms = 15000;
 lv_obj_t * ip_label = nullptr;
 
@@ -199,16 +225,27 @@ void setup()
 
     connect_wifi();
 
-    lv_timer_handler();
-    Serial.printf("Ready: Arduino %s, LVGL %d.%d.%d\n", ESP_ARDUINO_VERSION_STR,
-                  LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH);
+    // Mount the SD card and register its LVGL file-system driver.
+    if (crowpanel::init_sd_card()) {
+        crowpanel::register_lvgl_sd_fs();
+    } else {
+        Serial.println("[main] SD card not available; slideshow disabled");
+    }
+
+    // Hand rendering/photo decoding to a dedicated task with a larger stack.
+    BaseType_t created = xTaskCreatePinnedToCore(
+        ui_task, "uiTask", ui_task_stack_words, nullptr,
+        ui_task_priority, &ui_task_handle, 1);
+    if (created != pdPASS) {
+        Serial.println("[main] failed to create UI task");
+        return;
+    }
+    Serial.println("[main] UI task started");
+
+    // The Arduino loopTask is no longer needed; its stack is too small for JPEG decode.
+    vTaskDelete(nullptr);
 }
 
-/**
- * @brief Service LVGL continuously.
- */
 void loop()
 {
-    lv_timer_handler();
-    delay(5);
 }
