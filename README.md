@@ -311,10 +311,76 @@ python3 scripts/gdrive_sync.py \
   --dry-run
 ```
 
+Sync is incremental: the script keeps `sync_state.json` on the SD card and only
+downloads photos whose Google Drive file ID is new or whose `modifiedTime` has
+changed since the last run. Photos that already exist in `SDCARD/upload/` and
+match the current Drive version are skipped, so repeated syncs are fast even
+when the folder is large.
+
 For fully automatic “upload from anywhere” sync without a local computer, a
 future option is a small cloud proxy (for example a Cloudflare Worker) that
 reads the Drive folder, prepares the images, and exposes simple HTTPS
 endpoints the frame can poll directly.
+
+## Info overlay (date, weather, indoor climate)
+
+The CrowPanel photo viewer shows a full-screen info card once every 10 photos.
+It stays on screen for 10 seconds, then the slideshow resumes from the same
+photo. Touch input is ignored while the card is visible, so a tap will not toggle
+pause during the hold.
+
+The card displays:
+
+- Current date, formatted as weekday, month, and day. Before NTP sync the date
+  line shows `Date unavailable`.
+- Outdoor weather from Open-Meteo for the default Vietnam location
+  (`12.864506604834714, 107.97442705894242`), shown as temperature in Celsius
+  and a short condition text such as `Clear sky` or `Rain`. No API key is
+  required.
+- Indoor temperature and humidity from the DHT20 sensor on the I2C bus. If the
+  sensor is missing or a read fails, the card shows `Indoor sensor offline`.
+
+The bottom of the card shows the required attribution line:
+
+> Weather data by Open-Meteo.com (CC BY 4.0)
+
+Network and sensor reads are kept off the LVGL task so the UI stays responsive.
+Weather is fetched over HTTPS by a dedicated `weather_task` FreeRTOS task
+pinned to core 0, refreshed on the `WEATHER_REFRESH_MIN` cadence (default: 60
+minutes). The DHT20 is polled every 30 seconds by a separate `dht20_task` on
+core 0; each read blocks about 80 ms, so running it on its own task prevents
+LVGL stutter.
+
+### Configuring the weather location
+
+The default location is hardcoded in `include/crowpanel/weather_config.h` as the
+Vietnam coordinates above. Override it at build time without editing the header.
+
+Via `.env` (gitignored, parsed by `scripts/load_env.py`):
+
+```sh
+WEATHER_LAT="12.8645066"
+WEATHER_LON="107.9744271"
+```
+
+`WEATHER_LAT` and `WEATHER_LON` must be supplied as quoted strings because they
+are concatenated straight into the HTTPS URL. `WEATHER_REFRESH_MIN` is a plain
+integer used by FreeRTOS timeout math, so override it with a numeric build flag
+rather than `.env`:
+
+```sh
+pio run -e crowpanel-5 -- -DWEATHER_REFRESH_MIN=90
+```
+
+You can also pass latitude and longitude on the command line:
+
+```sh
+pio run -e crowpanel-5 -- -DWEATHER_LAT='"12.8645066"' -DWEATHER_LON='"107.9744271"' -DWEATHER_REFRESH_MIN=90
+```
+
+If weather data is missing or WiFi is offline, the card shows
+`Weather unavailable`. The first successful fetch may take a few minutes after
+boot, depending on when the task runs and whether NTP has already synced.
 
 ## Versions this starter was verified with
 

@@ -1,5 +1,7 @@
 #include "crowpanel/photo_viewer.h"
 
+#include <time.h>
+
 #include <lvgl.h>
 #include "crowpanel/sdcard.h"
 #include "crowpanel/display_power.h"
@@ -30,6 +32,20 @@ lv_obj_t* g_screen = nullptr;
 lv_obj_t* g_image = nullptr;
 lv_obj_t* g_index_label = nullptr;
 lv_obj_t* g_pause_label = nullptr;
+
+int g_photos_since_info = 0;
+bool g_info_showing = false;
+uint32_t g_info_show_start_ms = 0;
+
+lv_obj_t* g_info_overlay = nullptr;
+lv_obj_t* g_info_date_label = nullptr;
+lv_obj_t* g_info_weather_label = nullptr;
+lv_obj_t* g_info_climate_label = nullptr;
+lv_obj_t* g_info_attribution_label = nullptr;
+
+WeatherData g_cached_weather = {};
+IndoorClimate g_cached_climate = {};
+portMUX_TYPE g_info_mux = portMUX_INITIALIZER_UNLOCKED;
 
 enum class TouchState { IDLE, PRESSED };
 TouchState g_touch_state = TouchState::IDLE;
@@ -114,6 +130,9 @@ void load_photo(int index)
 
 void update_fade()
 {
+    if (g_info_showing) {
+        return;
+    }
     if (g_fade_state == FadeState::VISIBLE) {
         return;
     }
@@ -160,6 +179,67 @@ void update_pause_overlay()
     }
 }
 
+void render_info_labels()
+{
+    if (g_info_date_label) {
+        if (display_power_is_ntp_synced()) {
+            char buf[48];
+            const time_t now = time(nullptr);
+            struct tm local;
+            localtime_r(&now, &local);
+            strftime(buf, sizeof(buf), "%A, %B %d", &local);
+            lv_label_set_text(g_info_date_label, buf);
+        } else {
+            lv_label_set_text(g_info_date_label, "Date unavailable");
+        }
+    }
+
+    if (g_info_weather_label) {
+        WeatherData weather;
+        if (photo_viewer_get_weather(weather)) {
+            lv_label_set_text_fmt(g_info_weather_label, "Outside: %dC, %s", weather.temperature_c, weather.condition_text);
+        } else {
+            lv_label_set_text(g_info_weather_label, "Weather unavailable");
+        }
+    }
+
+    if (g_info_climate_label) {
+        IndoorClimate climate;
+        if (photo_viewer_get_indoor_climate(climate)) {
+            lv_label_set_text_fmt(g_info_climate_label, "Indoor: %dC, %d%% humidity", climate.temperature_c, climate.humidity_pct);
+        } else {
+            lv_label_set_text(g_info_climate_label, "Indoor sensor offline");
+        }
+    }
+}
+
+void show_info_overlay()
+{
+    if (!g_info_overlay || g_info_showing) {
+        return;
+    }
+    render_info_labels();
+    lv_obj_move_foreground(g_info_overlay);
+    lv_obj_clear_flag(g_info_overlay, LV_OBJ_FLAG_HIDDEN);
+    g_info_showing = true;
+    g_info_show_start_ms = millis();
+    Serial.println("[info] overlay shown");
+}
+
+void hide_info_overlay()
+{
+    if (!g_info_showing) {
+        return;
+    }
+    g_info_showing = false;
+    if (g_info_overlay) {
+        lv_obj_add_flag(g_info_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+    g_photos_since_info = 0;
+    g_last_advance_ms = millis();
+    Serial.println("[info] overlay dismissed");
+}
+
 void shuffle_photos()
 {
     if (g_photo_count <= 1) {
@@ -179,6 +259,10 @@ void advance_photo(int delta)
     if (g_photo_count == 0) {
         return;
     }
+    g_photos_since_info++;
+    if (g_photos_since_info >= INFO_EVERY_N_PHOTOS) {
+        show_info_overlay();
+    }
     int next = g_current_index + delta;
     if (next >= g_photo_count) {
         next = 0;
@@ -190,6 +274,9 @@ void advance_photo(int delta)
 
 void on_press(const lv_indev_t* indev)
 {
+    if (g_info_showing) {
+        return;
+    }
     lv_point_t vect;
     lv_indev_get_vect(indev, &vect);
     if (abs(vect.x) > 2 || abs(vect.y) > 2) {
@@ -205,6 +292,10 @@ void on_press(const lv_indev_t* indev)
 
 void on_release(const lv_indev_t* indev)
 {
+    if (g_info_showing) {
+        g_touch_state = TouchState::IDLE;
+        return;
+    }
     if (g_touch_state != TouchState::PRESSED) {
         return;
     }
@@ -288,6 +379,40 @@ bool init_photo_viewer()
     lv_obj_align(g_pause_label, LV_ALIGN_TOP_MID, 0, 16);
     lv_obj_add_flag(g_pause_label, LV_OBJ_FLAG_HIDDEN);
 
+    g_info_overlay = lv_obj_create(g_screen);
+    lv_obj_set_size(g_info_overlay, SCREEN_W, SCREEN_H);
+    lv_obj_set_pos(g_info_overlay, 0, 0);
+    lv_obj_set_style_bg_color(g_info_overlay, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(g_info_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(g_info_overlay, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(g_info_overlay, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(g_info_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_info_overlay, LV_OBJ_FLAG_HIDDEN);
+
+    g_info_date_label = lv_label_create(g_info_overlay);
+    lv_obj_set_style_text_color(g_info_date_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(g_info_date_label, &lv_font_montserrat_40, LV_PART_MAIN);
+    lv_label_set_text(g_info_date_label, "Date unavailable");
+    lv_obj_align(g_info_date_label, LV_ALIGN_TOP_MID, 0, 48);
+
+    g_info_weather_label = lv_label_create(g_info_overlay);
+    lv_obj_set_style_text_color(g_info_weather_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(g_info_weather_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(g_info_weather_label, "Weather unavailable");
+    lv_obj_align(g_info_weather_label, LV_ALIGN_TOP_MID, 0, 160);
+
+    g_info_climate_label = lv_label_create(g_info_overlay);
+    lv_obj_set_style_text_color(g_info_climate_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(g_info_climate_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(g_info_climate_label, "Indoor sensor offline");
+    lv_obj_align(g_info_climate_label, LV_ALIGN_TOP_MID, 0, 200);
+
+    g_info_attribution_label = lv_label_create(g_info_overlay);
+    lv_obj_set_style_text_color(g_info_attribution_label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(g_info_attribution_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_label_set_text(g_info_attribution_label, "Weather data by Open-Meteo.com (CC BY 4.0)");
+    lv_obj_align(g_info_attribution_label, LV_ALIGN_BOTTOM_MID, 0, -24);
+
     g_current_index = -1;
     g_last_advance_ms = millis();
     g_touch_state = TouchState::IDLE;
@@ -340,6 +465,13 @@ void photo_viewer_tick()
 {
     update_fade();
 
+    if (g_info_showing) {
+        if (millis() - g_info_show_start_ms >= INFO_HOLD_MS) {
+            hide_info_overlay();
+        }
+        return;
+    }
+
     if (g_paused || g_photo_count == 0) {
         return;
     }
@@ -348,6 +480,41 @@ void photo_viewer_tick()
         g_last_advance_ms = now;
         advance_photo(1);
     }
+}
+
+void photo_viewer_set_weather(const WeatherData& data)
+{
+    portENTER_CRITICAL(&g_info_mux);
+    g_cached_weather = data;
+    portEXIT_CRITICAL(&g_info_mux);
+}
+
+void photo_viewer_set_indoor_climate(const IndoorClimate& data)
+{
+    portENTER_CRITICAL(&g_info_mux);
+    g_cached_climate = data;
+    portEXIT_CRITICAL(&g_info_mux);
+}
+
+bool photo_viewer_get_weather(WeatherData& out)
+{
+    portENTER_CRITICAL(&g_info_mux);
+    out = g_cached_weather;
+    portEXIT_CRITICAL(&g_info_mux);
+    return out.valid;
+}
+
+bool photo_viewer_get_indoor_climate(IndoorClimate& out)
+{
+    portENTER_CRITICAL(&g_info_mux);
+    out = g_cached_climate;
+    portEXIT_CRITICAL(&g_info_mux);
+    return out.valid;
+}
+
+void photo_viewer_show_info()
+{
+    show_info_overlay();
 }
 
 } // namespace crowpanel

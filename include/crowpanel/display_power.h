@@ -16,5 +16,6 @@ void display_power_reset_activity();
 bool display_power_reset_activity_and_check_wake();
 void display_power_test_off(uint32_t ms);
 bool display_power_is_active();
+bool display_power_is_ntp_synced();
 
 } // namespace crowpanel

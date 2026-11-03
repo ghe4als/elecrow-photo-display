@@ -162,4 +162,9 @@ bool display_power_is_active()
     return g_state != State::OFF || g_test_off_active;
 }
 
+bool display_power_is_ntp_synced()
+{
+    return g_ntp_synced;
+}
+
 } // namespace crowpanel

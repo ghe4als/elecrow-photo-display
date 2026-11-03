@@ -10,8 +10,11 @@
 #include "crowpanel/touch.h"
 #include "crowpanel/ui.h"
 #include "crowpanel/sdcard.h"
+#include "crowpanel/dht20.h"
 #include "crowpanel/photo_viewer.h"
 #include "crowpanel/display_power.h"
+#include "crowpanel/weather.h"
+#include "crowpanel/weather_config.h"
 
 /*---------------------------------------------------------------
  * PlatformIO RGB/LVGL application
@@ -134,6 +137,87 @@ TaskHandle_t ui_task_handle = nullptr;
     }
 }
 
+constexpr uint32_t dht20_poll_interval_ms = 30000;
+constexpr uint32_t dht20_task_stack_words = 2048; // 8 KB
+constexpr UBaseType_t dht20_task_priority = 1;
+TaskHandle_t dht20_task_handle = nullptr;
+
+/** Dedicated DHT20 poller pinned to core 0.
+ *
+ *  dht20_read() blocks ~80 ms per conversion, so it must never run inside
+ *  the LVGL ui_task or an LVGL timer. This task reads every 30 s and
+ *  publishes the last-good values (or an offline marker) for the overlay.
+ */
+void dht20_task(void*)
+{
+    int temperature = 0;
+    int humidity = 0;
+    bool previously_ok = true;
+
+    for (;;) {
+        crowpanel::IndoorClimate climate;
+        if (dht20_read(temperature, humidity)) {
+            climate.valid = true;
+            climate.temperature_c = temperature;
+            climate.humidity_pct = humidity;
+            climate.updated_ms = millis();
+            crowpanel::photo_viewer_set_indoor_climate(climate);
+            Serial.printf("[dht20] %d C, %d %%RH\n", temperature, humidity);
+            previously_ok = true;
+        } else {
+            climate.valid = false;
+            climate.temperature_c = 0;
+            climate.humidity_pct = 0;
+            climate.updated_ms = millis();
+            crowpanel::photo_viewer_set_indoor_climate(climate);
+            // Announce only the transition into failure so a missing or
+            // flaky sensor cannot flood the serial log.
+            if (previously_ok) {
+                Serial.println("[dht20] read failed; indoor sensor offline");
+            }
+            previously_ok = false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(dht20_poll_interval_ms));
+    }
+}
+
+constexpr uint32_t weather_task_stack_words = 8192; // 32 KB (TLS handshake + JSON parse)
+constexpr UBaseType_t weather_task_priority = 1;
+TaskHandle_t weather_task_handle = nullptr;
+
+/** Dedicated Open-Meteo fetcher pinned to core 0.
+ *
+ *  weather_fetch_blocking() blocks up to ~10 s on the TLS handshake and
+ *  HTTPS GET, so it must never run inside the LVGL ui_task or an LVGL timer.
+ *  The task waits for WiFi + NTP, then fetches and republishes the result on
+ *  the WEATHER_REFRESH_MIN cadence.
+ */
+void weather_task(void*)
+{
+    for (;;) {
+        if (!crowpanel::display_power_is_ntp_synced() || WiFi.status() != WL_CONNECTED) {
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            continue;
+        }
+
+        WeatherData fetched;
+        weather_fetch_blocking(fetched);
+
+        // Copy into the viewer's snapshot type and publish regardless of
+        // success: a failed fetch carries valid=false so the overlay can
+        // render "Weather unavailable" instead of stale data.
+        crowpanel::WeatherData snapshot;
+        snapshot.valid = fetched.valid;
+        snapshot.temperature_c = fetched.temperature_c;
+        snapshot.updated_ms = fetched.updated_ms;
+        strlcpy(snapshot.condition_text, fetched.condition_text,
+                sizeof(snapshot.condition_text));
+        crowpanel::photo_viewer_set_weather(snapshot);
+
+        vTaskDelay(pdMS_TO_TICKS(WEATHER_REFRESH_MIN * 60000UL));
+    }
+}
+
 }
 
 constexpr uint32_t wifi_timeout_ms = 15000;
@@ -183,6 +267,9 @@ void setup()
 {
     Serial.begin(115200);
     Wire.begin(19, 20);
+    if (!dht20_init()) {
+        Serial.println("[main] DHT20 init failed; indoor climate will report offline");
+    }
     pinMode(led_pin, OUTPUT);
     set_led(false);
 
@@ -220,6 +307,11 @@ void setup()
 
     connect_wifi();
 
+    // Prebuild the Open-Meteo request URL; the fetch task only needs WiFi + NTP.
+    if (!weather_init()) {
+        Serial.println("[main] weather_init failed; weather card will show offline");
+    }
+
     // Mount the SD card and register its LVGL file-system driver.
     if (crowpanel::init_sd_card()) {
         crowpanel::register_lvgl_sd_fs();
@@ -236,6 +328,26 @@ void setup()
         return;
     }
     Serial.println("[main] UI task started");
+
+    // Poll the DHT20 on core 0 so its ~80 ms reads never stall LVGL on core 1.
+    BaseType_t dht20_created = xTaskCreatePinnedToCore(
+        dht20_task, "dht20Task", dht20_task_stack_words, nullptr,
+        dht20_task_priority, &dht20_task_handle, 0);
+    if (dht20_created != pdPASS) {
+        Serial.println("[main] failed to create DHT20 task");
+    } else {
+        Serial.println("[main] DHT20 task started");
+    }
+
+    // Fetch weather on core 0; the ~10 s HTTPS calls must never stall LVGL.
+    BaseType_t weather_created = xTaskCreatePinnedToCore(
+        weather_task, "weatherTask", weather_task_stack_words, nullptr,
+        weather_task_priority, &weather_task_handle, 0);
+    if (weather_created != pdPASS) {
+        Serial.println("[main] failed to create weather task");
+    } else {
+        Serial.println("[main] weather task started");
+    }
 
     // The Arduino loopTask is no longer needed; its stack is too small for JPEG decode.
     vTaskDelete(nullptr);

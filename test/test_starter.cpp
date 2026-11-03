@@ -41,6 +41,17 @@ static void test_mapClamp_degenerate(void) {
     TEST_ASSERT_EQUAL_INT32(42, starter::mapClamp(7, 5, 5, 42, 99));
 }
 
+// Weather tests live in test_weather_utils.cpp; PlatformIO compiles every
+// file under test/ into one program, so this file owns the single Unity main
+// and registers both sets of test functions here.
+extern void test_weather_clear_sky(void);
+extern void test_weather_moderate_rain(void);
+extern void test_weather_unknown_code(void);
+extern void test_weather_all_known_codes(void);
+extern void test_weather_all_codes_non_null(void);
+extern void test_weather_unmapped_codes_unknown(void);
+extern void test_weather_negative_unknown(void);
+
 int main(int argc, char** argv) {
     UNITY_BEGIN();
     RUN_TEST(test_add_basic);
@@ -50,5 +61,12 @@ int main(int argc, char** argv) {
     RUN_TEST(test_mapClamp_clamps_above);
     RUN_TEST(test_mapClamp_inverted_range);
     RUN_TEST(test_mapClamp_degenerate);
+    RUN_TEST(test_weather_clear_sky);
+    RUN_TEST(test_weather_moderate_rain);
+    RUN_TEST(test_weather_unknown_code);
+    RUN_TEST(test_weather_all_known_codes);
+    RUN_TEST(test_weather_all_codes_non_null);
+    RUN_TEST(test_weather_unmapped_codes_unknown);
+    RUN_TEST(test_weather_negative_unknown);
     return UNITY_END();
 }

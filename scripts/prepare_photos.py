@@ -3,6 +3,8 @@
 
 Reads HEIC/JPEG/PNG files from a source folder, resizes them to fit the
 800x480 screen, and writes baseline JPEGs to the SD card's /photos folder.
+Photos whose output JPEG already exists and is newer than the source are
+skipped, keeping incremental re-syncs cheap.
 """
 
 import argparse
@@ -12,6 +14,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 SCREEN_W = 800
 SCREEN_H = 480
@@ -40,21 +47,56 @@ def run_sips_convert(src: Path, dst: Path, fmt: str) -> bool:
 
 
 def read_exif_orientation(src: Path) -> int:
+    if Image is None:
+        return 1
     try:
-        from PIL import Image
         with Image.open(src) as img:
             return img.getexif().get(274, 1)
     except Exception:
         return 1
 
 
-def prepare_with_pillow(src: Path, dst: Path, width: int, height: int) -> bool:
-    try:
-        from PIL import Image, ImageOps
-    except ImportError as exc:
+def crop_to_fill(img, width: int, height: int):
+    """Crop and resize so the output exactly fills width x height.
+
+    Preserves the center of the image and trims the longer axis to match
+    the target aspect ratio before scaling up/down to fit the screen.
+    """
+    target_ratio = width / height
+    src_ratio = img.width / img.height
+
+    if src_ratio > target_ratio:
+        # Source is too wide; crop left/right to match target height ratio.
+        new_width = int(img.height * target_ratio)
+        left = (img.width - new_width) // 2
+        img = img.crop((left, 0, left + new_width, img.height))
+    elif src_ratio < target_ratio:
+        # Source is too tall; crop top/bottom to match target width ratio.
+        new_height = int(img.width / target_ratio)
+        top = (img.height - new_height) // 2
+        img = img.crop((0, top, img.width, top + new_height))
+
+    if img.size != (width, height):
+        img = img.resize((width, height), Image.Resampling.LANCZOS)
+    return img
+
+
+def fit_inside_letterbox(img, width: int, height: int):
+    """Shrink to fit inside width x height and center on a black canvas."""
+    img.thumbnail((width, height), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (width, height), (0, 0, 0))
+    x = (width - img.width) // 2
+    y = (height - img.height) // 2
+    canvas.paste(img, (x, y))
+    return canvas
+
+
+def prepare_with_pillow(src: Path, dst: Path, width: int, height: int, *, fit_inside: bool = False) -> bool:
+    if Image is None:
         print("Pillow is required to handle EXIF orientation correctly.")
         print("Install it with: pip install Pillow")
-        raise SystemExit(exc)
+        raise SystemExit(1)
+    from PIL import ImageOps
 
     orientation = read_exif_orientation(src)
     print(f"  EXIF orientation tag: {orientation}")
@@ -69,12 +111,13 @@ def prepare_with_pillow(src: Path, dst: Path, width: int, height: int) -> bool:
                 upright = upright.rotate(270, expand=True)
                 print("  pre-rotated portrait source to landscape for portrait-mounted frame")
 
-            upright.thumbnail((width, height), Image.Resampling.LANCZOS)
+            if fit_inside:
+                canvas = fit_inside_letterbox(upright, width, height)
+                print("  fit inside screen (letterbox)")
+            else:
+                canvas = crop_to_fill(upright, width, height)
+                print("  cropped to fill screen")
 
-            canvas = Image.new("RGB", (width, height), (0, 0, 0))
-            x = (width - upright.width) // 2
-            y = (height - upright.height) // 2
-            canvas.paste(upright, (x, y))
             canvas.save(dst, "JPEG", quality=92, optimize=True)
         return True
     except Exception as e:
@@ -103,7 +146,7 @@ def eject_volume(mount_point: Path) -> None:
         print("[eject] diskutil not found (not macOS?)")
 
 
-def prepare_photo(src: Path, dst: Path, width: int, height: int) -> bool:
+def prepare_photo(src: Path, dst: Path, width: int, height: int, *, fit_inside: bool = False) -> bool:
     print(f"Preparing {src.name} ...")
 
     tmp_dir = tempfile.mkdtemp(prefix="crowpanel-photo-")
@@ -116,7 +159,7 @@ def prepare_photo(src: Path, dst: Path, width: int, height: int) -> bool:
         else:
             src_to_process = src
 
-        return prepare_with_pillow(src_to_process, dst, width, height)
+        return prepare_with_pillow(src_to_process, dst, width, height, fit_inside=fit_inside)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -163,6 +206,11 @@ def main() -> int:
         help="Target height",
     )
     parser.add_argument(
+        "--fit",
+        action="store_true",
+        help="Shrink images to fit the screen with black bars (default: crop to fill)",
+    )
+    parser.add_argument(
         "--no-eject",
         action="store_true",
         help="Do not eject the SD card after processing",
@@ -191,7 +239,11 @@ def main() -> int:
             continue
 
         dst = photos_dir / (f.stem + ".jpg")
-        if prepare_photo(f, dst, args.width, args.height):
+        if dst.exists() and dst.stat().st_mtime > f.stat().st_mtime:
+            print(f"Skipping {f.name}: {dst.name} already up to date")
+            skipped += 1
+            continue
+        if prepare_photo(f, dst, args.width, args.height, fit_inside=args.fit):
             prepared += 1
         else:
             print(f"Failed to prepare {f.name}")
