@@ -304,6 +304,10 @@ def main():
             print(f"Would skip unchanged: {f['name']}")
         for fid in removed_ids:
             print(f"Would remove (deleted from Drive): {manifest[fid].get('name', fid)}")
+        print(
+            f"Summary (dry-run): {len(to_download)} would download, "
+            f"{len(unchanged)} would skip, {len(removed_ids)} would remove."
+        )
         if not to_download and not removed_ids:
             print("All files up to date.")
         return
@@ -311,14 +315,12 @@ def main():
     upload_dir.mkdir(parents=True, exist_ok=True)
     photos_dir.mkdir(parents=True, exist_ok=True)
 
-    for f in unchanged:
-        print(f"skipping unchanged: {f['name']}")
-
+    total_to_download = len(to_download)
     with tempfile.TemporaryDirectory(prefix="gdrive_sync_") as tmp:
         tmp_path = Path(tmp)
-        for f in to_download:
+        for i, f in enumerate(to_download, start=1):
+            print(f"Downloading {i}/{total_to_download}: {f['name']} ...")
             dest = tmp_path / f["name"]
-            print(f"Downloading {f['name']} ...")
             download_file(service, f["id"], dest, label=f["name"])
             shutil.copy2(dest, upload_dir / f["name"])
             manifest[f["id"]] = {
@@ -328,6 +330,9 @@ def main():
                 "size": str(dest.stat().st_size),
             }
             save_manifest(manifest_path, manifest)
+
+    for f in unchanged:
+        print(f"skipping unchanged: {f['name']}")
 
     for fid in removed_ids:
         entry = manifest.pop(fid)
@@ -342,6 +347,11 @@ def main():
                 print(f"Removing {target.name} (deleted from Drive)")
                 target.unlink()
         save_manifest(manifest_path, manifest)
+
+    print(
+        f"Summary: {total_to_download} downloaded, {len(unchanged)} skipped, "
+        f"{len(removed_ids)} removed."
+    )
 
     prepare_script = Path(__file__).with_name("prepare_photos.py")
     if not prepare_script.exists():
