@@ -138,6 +138,7 @@ TaskHandle_t ui_task_handle = nullptr;
 }
 
 constexpr uint32_t dht20_poll_interval_ms = 30000;
+constexpr uint32_t dht20_max_consecutive_failures = 3;
 constexpr uint32_t dht20_task_stack_words = 2048; // 8 KB
 constexpr UBaseType_t dht20_task_priority = 1;
 TaskHandle_t dht20_task_handle = nullptr;
@@ -153,6 +154,7 @@ void dht20_task(void*)
     int temperature = 0;
     int humidity = 0;
     bool previously_ok = true;
+    uint32_t consecutive_failures = 0;
 
     for (;;) {
         crowpanel::IndoorClimate climate;
@@ -164,7 +166,9 @@ void dht20_task(void*)
             crowpanel::photo_viewer_set_indoor_climate(climate);
             Serial.printf("[dht20] %d C, %d %%RH\n", temperature, humidity);
             previously_ok = true;
+            consecutive_failures = 0;
         } else {
+            ++consecutive_failures;
             climate.valid = false;
             climate.temperature_c = 0;
             climate.humidity_pct = 0;
@@ -177,6 +181,17 @@ void dht20_task(void*)
             }
             previously_ok = false;
         }
+
+        // A sensor that passed the boot probe but then stops answering means
+        // a stuck bus; every further transaction makes the ESP-IDF i2c driver
+        // log ESP_ERR_INVALID_STATE. Retire after a few misses: the overlay
+        // keeps showing "Indoor sensor offline" with no more bus traffic.
+        if (consecutive_failures >= dht20_max_consecutive_failures) {
+            Serial.printf("[dht20] offline after %u consecutive read failures; I2C traffic stopped\n",
+                          consecutive_failures);
+            vTaskSuspend(nullptr);
+        }
+
         vTaskDelay(pdMS_TO_TICKS(dht20_poll_interval_ms));
     }
 }
@@ -266,9 +281,19 @@ void connect_wifi()
 void setup()
 {
     Serial.begin(115200);
+    // Single I2C bus bring-up: GT911 touch (via PCA9557) and the DHT20 share
+    // pins 19/20, so Wire.begin must run exactly once, before any device is
+    // probed. Re-initializing later would leave the ESP-IDF i2c driver in an
+    // invalid state.
     Wire.begin(19, 20);
-    if (!dht20_init()) {
-        Serial.println("[main] DHT20 init failed; indoor climate will report offline");
+    delay(50); // let the I2C peripheral settle before the first DHT20 probe
+
+    // Probe the DHT20 once. When it is missing (or the bus is broken) the
+    // polling task is never created, so the driver cannot spam
+    // ESP_ERR_INVALID_STATE every 30 s.
+    const bool dht20_ready = dht20_init();
+    if (!dht20_ready) {
+        Serial.println("[main] DHT20 init failed; indoor sensor offline");
     }
     pinMode(led_pin, OUTPUT);
     set_led(false);
@@ -330,13 +355,17 @@ void setup()
     Serial.println("[main] UI task started");
 
     // Poll the DHT20 on core 0 so its ~80 ms reads never stall LVGL on core 1.
-    BaseType_t dht20_created = xTaskCreatePinnedToCore(
-        dht20_task, "dht20Task", dht20_task_stack_words, nullptr,
-        dht20_task_priority, &dht20_task_handle, 0);
-    if (dht20_created != pdPASS) {
-        Serial.println("[main] failed to create DHT20 task");
-    } else {
-        Serial.println("[main] DHT20 task started");
+    // Spawn it only after the boot probe succeeded; otherwise the task would
+    // keep hitting the dead bus every 30 s and flood the log.
+    if (dht20_ready) {
+        BaseType_t dht20_created = xTaskCreatePinnedToCore(
+            dht20_task, "dht20Task", dht20_task_stack_words, nullptr,
+            dht20_task_priority, &dht20_task_handle, 0);
+        if (dht20_created != pdPASS) {
+            Serial.println("[main] failed to create DHT20 task");
+        } else {
+            Serial.println("[main] DHT20 task started");
+        }
     }
 
     // Fetch weather on core 0; the ~10 s HTTPS calls must never stall LVGL.
