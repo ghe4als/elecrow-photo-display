@@ -5,7 +5,7 @@
 
 namespace crowpanel {
 
-constexpr int MAX_PHOTOS = 128;
+constexpr int MAX_PHOTOS = 256;
 constexpr uint32_t PHOTO_INTERVAL_MS = 10000;
 
 constexpr int INFO_EVERY_N_PHOTOS = 10;
