@@ -12,6 +12,7 @@ photos/ so the SD card mirrors the Drive folder.
 """
 
 import argparse
+import hashlib
 import http.client
 import json
 import shutil
@@ -68,7 +69,10 @@ def list_image_files(service, folder_id):
             .list(
                 q=query,
                 spaces="drive",
-                fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+                fields=(
+                    "nextPageToken, files(id, name, mimeType, modifiedTime, "
+                    "md5Checksum, size)"
+                ),
                 pageToken=page_token,
                 pageSize=100,
             )
@@ -181,8 +185,40 @@ def download_file(service, file_id, dest_path, label=None):
 MANIFEST_NAME = "sync_state.json"
 
 
+def _md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _is_unchanged(f, entry, upload_dir):
+    """Return True when the local copy already matches Drive content.
+
+    A file is unchanged when the Drive md5Checksum matches the manifest's
+    stored checksum and the local upload/ file exists with the matching size.
+    If Drive does not expose a checksum (rare), fall back to the previous
+    modifiedTime comparison plus local file existence.
+    """
+    if entry is None:
+        return False
+    drive_md5 = f.get("md5Checksum")
+    drive_size = f.get("size")
+    local_path = upload_dir / f["name"]
+    if not local_path.is_file():
+        return False
+    if drive_md5 and entry.get("md5Checksum") == drive_md5:
+        local_size = str(local_path.stat().st_size)
+        if drive_size is None or local_size == str(drive_size):
+            return True
+    if entry.get("modifiedTime") == f["modifiedTime"]:
+        return True
+    return False
+
+
 def load_manifest(manifest_path):
-    """Load {file_id: {name, modifiedTime}}; a missing/corrupt file counts as empty."""
+    """Load {file_id: {name, modifiedTime, md5Checksum, size}}; missing/corrupt counts as empty."""
     if not manifest_path.exists():
         return {}
     try:
@@ -251,7 +287,7 @@ def main():
     unchanged = []
     for f in files:
         entry = manifest.get(f["id"])
-        if entry is not None and entry.get("modifiedTime") == f["modifiedTime"]:
+        if _is_unchanged(f, entry, upload_dir):
             unchanged.append(f)
         else:
             to_download.append(f)
@@ -288,6 +324,8 @@ def main():
             manifest[f["id"]] = {
                 "name": f["name"],
                 "modifiedTime": f["modifiedTime"],
+                "md5Checksum": _md5(dest),
+                "size": str(dest.stat().st_size),
             }
             save_manifest(manifest_path, manifest)
 
