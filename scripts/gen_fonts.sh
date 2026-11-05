@@ -8,10 +8,10 @@ cd "$(dirname "$0")/.."
 mkdir -p src/crowpanel/fonts
 
 # Generate the clock font
-# Range 0x30-0x3A: digits 0-9 and colon (:)
+# Range 0x2D-0x3A: hyphen (unsynced "--:--" placeholder), digits 0-9, colon (:)
 npx --yes lv_font_conv \
   --font .pio/libdeps/crowpanel-5/lvgl/scripts/built_in_font/Montserrat-Medium.ttf \
-  --range 0x30-0x3A \
+  --range 0x2D-0x3A \
   --size 80 \
   --bpp 4 \
   --format lvgl \

@@ -95,6 +95,7 @@ bool fetch_and_parse(crowpanel::WeatherData& out)
 
     out.temperature_c = static_cast<int>(lroundf(temperature.as<float>()));
     const int code = weather_code.as<int>();
+    out.wmo_code = code;
     strlcpy(out.condition_text, wmo_weather_code_to_text(code),
             sizeof(out.condition_text));
     out.last_success_ms = millis();
@@ -120,6 +121,7 @@ bool weather_fetch_blocking(crowpanel::WeatherData& out)
     out.status = crowpanel::WeatherStatus::Error;
     out.temperature_c = 0;
     out.condition_text[0] = '\0';
+    out.wmo_code = -1;
     out.last_success_ms = 0;
     out.last_attempt_ms = 0;
 

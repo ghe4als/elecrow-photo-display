@@ -24,6 +24,7 @@ struct WeatherData {
     bool valid;               // last-good reading exists
     int temperature_c;       // outdoor temperature rounded to whole degrees C
     char condition_text[32]; // WMO code mapped to short human-readable text
+    int wmo_code;
     uint32_t last_success_ms; // millis() of last good fetch
     uint32_t last_attempt_ms;
 };

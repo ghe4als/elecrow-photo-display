@@ -5,6 +5,11 @@
 #include <lvgl.h>
 #include "crowpanel/sdcard.h"
 #include "crowpanel/display_power.h"
+#include "weather_utils.h"
+
+extern "C" {
+LV_FONT_DECLARE(lv_font_clock_80);
+}
 
 namespace crowpanel {
 
@@ -13,6 +18,12 @@ namespace {
 constexpr uint16_t SCREEN_W = 800;
 constexpr uint16_t SCREEN_H = 480;
 constexpr int SCALE_NONE = 256;
+
+constexpr int32_t LOGICAL_W = 480;
+constexpr int32_t LOGICAL_H = 800;
+constexpr int32_t INFO_CARD_ROTATION = 900;
+static_assert(LOGICAL_W == SCREEN_H && LOGICAL_H == SCREEN_W,
+              "portrait logical space must mirror the framebuffer");
 
 constexpr int16_t SWIPE_THRESHOLD_PX = 60;
 constexpr int16_t SWIPE_MAX_VERTICAL_DRIFT_PX = 80;
@@ -38,10 +49,18 @@ bool g_info_showing = false;
 uint32_t g_info_show_start_ms = 0;
 
 lv_obj_t* g_info_overlay = nullptr;
+lv_obj_t* g_info_weekday_label = nullptr;
 lv_obj_t* g_info_date_label = nullptr;
-lv_obj_t* g_info_weather_label = nullptr;
-lv_obj_t* g_info_climate_label = nullptr;
+lv_obj_t* g_info_clock_label = nullptr;
+lv_obj_t* g_info_weather_icon = nullptr;
+lv_obj_t* g_info_temp_label = nullptr;
+lv_obj_t* g_info_condition_label = nullptr;
+lv_obj_t* g_info_divider = nullptr;
+lv_obj_t* g_info_indoor_label = nullptr;
+lv_obj_t* g_info_status_label = nullptr;
 lv_obj_t* g_info_attribution_label = nullptr;
+WeatherIcon g_weather_icon = WeatherIcon::Unknown;
+int g_clock_rendered_minute = -2;
 
 WeatherData g_cached_weather = {};
 IndoorClimate g_cached_climate = {};
@@ -58,6 +77,8 @@ FadeState g_fade_state = FadeState::VISIBLE;
 int g_pending_index = -1;
 uint32_t g_fade_start_ms = 0;
 lv_opa_t g_fade_opa = LV_OPA_COVER;
+
+void place_rotated(lv_obj_t* obj, int32_t cx, int32_t cy);
 
 void apply_opacity()
 {
@@ -86,6 +107,7 @@ void load_photo_now(int index)
         apply_opacity();
         if (g_index_label) {
             lv_label_set_text_fmt(g_index_label, "%d / %d (bad file)", index + 1, g_photo_count);
+            place_rotated(g_index_label, 430, 762);
         }
         return;
     }
@@ -109,6 +131,7 @@ void load_photo_now(int index)
 
     if (g_index_label) {
         lv_label_set_text_fmt(g_index_label, "%d / %d", index + 1, g_photo_count);
+        place_rotated(g_index_label, 430, 762);
     }
 }
 
@@ -179,37 +202,363 @@ void update_pause_overlay()
     }
 }
 
-void render_info_labels()
+lv_color_t accent_color()
 {
+    return lv_color_hex(0x58C4DC);
+}
+
+lv_color_t body_text_color()
+{
+    return lv_color_hex(0xF2F5F7);
+}
+
+lv_color_t muted_text_color()
+{
+    return lv_color_hex(0x8A97A6);
+}
+
+void place_rotated(lv_obj_t* obj, int32_t cx, int32_t cy)
+{
+    if (!obj) {
+        return;
+    }
+    lv_obj_update_layout(obj);
+    const int32_t w = lv_obj_get_width(obj);
+    const int32_t h = lv_obj_get_height(obj);
+    const int32_t sx = static_cast<int32_t>(SCREEN_W) - cy;
+    const int32_t sy = cx;
+    lv_obj_set_pos(obj, sx - w / 2, sy - h / 2);
+    lv_obj_set_style_transform_pivot_x(obj, w / 2, LV_PART_MAIN);
+    lv_obj_set_style_transform_pivot_y(obj, h / 2, LV_PART_MAIN);
+    lv_obj_set_style_transform_rotation(obj, INFO_CARD_ROTATION, LV_PART_MAIN);
+}
+
+lv_obj_t* make_card_label(const lv_font_t* font, lv_color_t color, const char* text)
+{
+    lv_obj_t* label = lv_label_create(g_info_overlay);
+    lv_obj_set_style_text_font(label, font, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, color, LV_PART_MAIN);
+    lv_label_set_text(label, text);
+    return label;
+}
+
+void draw_disc(lv_layer_t* layer, int32_t x, int32_t y, int32_t r, lv_color_t color)
+{
+    lv_draw_rect_dsc_t dsc;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_color = color;
+    dsc.bg_opa = LV_OPA_COVER;
+    dsc.radius = LV_RADIUS_CIRCLE;
+    const lv_area_t area = {x - r, y - r, x + r, y + r};
+    lv_draw_rect(layer, &dsc, &area);
+}
+
+void draw_bar(lv_layer_t* layer, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t width, lv_color_t color)
+{
+    lv_draw_line_dsc_t dsc;
+    lv_draw_line_dsc_init(&dsc);
+    dsc.color = color;
+    dsc.width = width;
+    dsc.opa = LV_OPA_COVER;
+    dsc.round_start = 1;
+    dsc.round_end = 1;
+    dsc.p1.x = x1;
+    dsc.p1.y = y1;
+    dsc.p2.x = x2;
+    dsc.p2.y = y2;
+    lv_draw_line(layer, &dsc);
+}
+
+void draw_cloud(lv_layer_t* layer, int32_t cx, int32_t cy, lv_color_t color)
+{
+    draw_disc(layer, cx - 18, cy + 1, 13, color);
+    draw_disc(layer, cx + 2, cy - 5, 17, color);
+    draw_disc(layer, cx + 21, cy + 2, 12, color);
+    lv_draw_rect_dsc_t dsc;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_color = color;
+    dsc.bg_opa = LV_OPA_COVER;
+    dsc.radius = 8;
+    const lv_area_t base = {cx - 30, cy + 1, cx + 33, cy + 14};
+    lv_draw_rect(layer, &dsc, &base);
+}
+
+void draw_sun(lv_layer_t* layer, int32_t cx, int32_t cy, int32_t radius, bool with_rays)
+{
+    draw_disc(layer, cx, cy, radius, accent_color());
+    if (!with_rays) {
+        return;
+    }
+    static const int32_t dirs[8][2] = {
+        {1000, 0}, {707, 707}, {0, 1000}, {-707, 707},
+        {-1000, 0}, {-707, -707}, {0, -1000}, {707, -707},
+    };
+    const int32_t inner = radius + 8;
+    const int32_t outer = radius + 22;
+    for (int i = 0; i < 8; ++i) {
+        draw_bar(layer,
+                 cx + dirs[i][0] * inner / 1000,
+                 cy + dirs[i][1] * inner / 1000,
+                 cx + dirs[i][0] * outer / 1000,
+                 cy + dirs[i][1] * outer / 1000,
+                 4, accent_color());
+    }
+}
+
+void weather_icon_draw_cb(lv_event_t* event)
+{
+    lv_obj_t* obj = static_cast<lv_obj_t*>(lv_event_get_target(event));
+    lv_layer_t* layer = lv_event_get_layer(event);
+    lv_area_t coords;
+    lv_obj_get_coords(obj, &coords);
+    const int32_t cx = coords.x1 + 56;
+    const int32_t cy = coords.y1 + 56;
+
+    switch (g_weather_icon) {
+    case WeatherIcon::Clear:
+        draw_sun(layer, cx, cy, 24, true);
+        break;
+    case WeatherIcon::PartlyCloudy:
+        draw_sun(layer, cx - 16, cy - 14, 13, true);
+        draw_cloud(layer, cx + 4, cy + 8, body_text_color());
+        break;
+    case WeatherIcon::Cloudy:
+        draw_cloud(layer, cx - 10, cy - 10, muted_text_color());
+        draw_cloud(layer, cx + 8, cy + 8, body_text_color());
+        break;
+    case WeatherIcon::Fog:
+        draw_cloud(layer, cx, cy - 10, body_text_color());
+        for (int i = 0; i < 3; ++i) {
+            const int32_t y = cy + 14 + i * 10;
+            draw_bar(layer, cx - 30, y, cx + 30, y, 4, accent_color());
+        }
+        break;
+    case WeatherIcon::Drizzle:
+        draw_cloud(layer, cx, cy - 8, body_text_color());
+        for (int i = 0; i < 3; ++i) {
+            const int32_t x = cx - 20 + i * 20;
+            draw_bar(layer, x, cy + 18, x - 4, cy + 27, 3, accent_color());
+        }
+        break;
+    case WeatherIcon::Rain:
+        draw_cloud(layer, cx, cy - 8, body_text_color());
+        for (int i = 0; i < 4; ++i) {
+            const int32_t x = cx - 24 + i * 16;
+            draw_bar(layer, x, cy + 18, x - 7, cy + 34, 3, accent_color());
+        }
+        break;
+    case WeatherIcon::Snow:
+        draw_cloud(layer, cx, cy - 10, body_text_color());
+        for (int i = 0; i < 3; ++i) {
+            const int32_t x = cx - 20 + i * 20;
+            const int32_t y = cy + 28;
+            draw_bar(layer, x - 6, y, x + 6, y, 2, body_text_color());
+            draw_bar(layer, x - 5, y - 5, x + 5, y + 5, 2, body_text_color());
+            draw_bar(layer, x - 5, y + 5, x + 5, y - 5, 2, body_text_color());
+        }
+        break;
+    case WeatherIcon::Storm: {
+        draw_cloud(layer, cx, cy - 10, body_text_color());
+        lv_draw_triangle_dsc_t tri;
+        lv_draw_triangle_dsc_init(&tri);
+        tri.bg_color = accent_color();
+        tri.bg_opa = LV_OPA_COVER;
+        tri.p[0].x = cx + 8;
+        tri.p[0].y = cy + 8;
+        tri.p[1].x = cx - 12;
+        tri.p[1].y = cy + 36;
+        tri.p[2].x = cx + 10;
+        tri.p[2].y = cy + 32;
+        lv_draw_triangle(layer, &tri);
+        break;
+    }
+    case WeatherIcon::Unknown:
+    default: {
+        lv_draw_arc_dsc_t arc;
+        lv_draw_arc_dsc_init(&arc);
+        arc.color = accent_color();
+        arc.width = 4;
+        arc.radius = 28;
+        arc.center.x = cx;
+        arc.center.y = cy;
+        arc.start_angle = 0;
+        arc.end_angle = 360;
+        arc.rounded = 1;
+        lv_draw_arc(layer, &arc);
+
+        lv_draw_label_dsc_t label;
+        lv_draw_label_dsc_init(&label);
+        label.text = "?";
+        label.font = &lv_font_montserrat_40;
+        label.color = body_text_color();
+        label.align = LV_TEXT_ALIGN_CENTER;
+        const lv_area_t area = {coords.x1, coords.y1, coords.x1 + 111, coords.y1 + 111};
+        lv_draw_label(layer, &label, &area);
+        break;
+    }
+    }
+}
+
+bool get_local_time(struct tm& local)
+{
+    if (!display_power_is_ntp_synced()) {
+        return false;
+    }
+    const time_t now = time(nullptr);
+    localtime_r(&now, &local);
+    return true;
+}
+
+int current_logical_minute()
+{
+    struct tm local;
+    if (!get_local_time(local)) {
+        return -1;
+    }
+    return local.tm_hour * 60 + local.tm_min;
+}
+
+void render_clock_label()
+{
+    if (!g_info_clock_label) {
+        return;
+    }
+    char buf[8];
+    struct tm local;
+    if (get_local_time(local)) {
+        strftime(buf, sizeof(buf), "%H:%M", &local);
+        g_clock_rendered_minute = local.tm_hour * 60 + local.tm_min;
+    } else {
+        strlcpy(buf, "--:--", sizeof(buf));
+        g_clock_rendered_minute = -1;
+    }
+    lv_label_set_text(g_info_clock_label, buf);
+    place_rotated(g_info_clock_label, 240, 220);
+}
+
+void refresh_clock_if_minute_changed()
+{
+    if (!g_info_clock_label) {
+        return;
+    }
+    if (current_logical_minute() != g_clock_rendered_minute) {
+        render_clock_label();
+    }
+}
+
+void render_weather_icon(const WeatherData& weather, bool has_weather)
+{
+    if (!g_info_weather_icon) {
+        return;
+    }
+    const WeatherIcon icon = has_weather ? wmo_weather_code_to_icon(weather.wmo_code)
+                                         : WeatherIcon::Unknown;
+    if (icon != g_weather_icon) {
+        g_weather_icon = icon;
+        lv_obj_invalidate(g_info_weather_icon);
+    }
+}
+
+void render_info_card()
+{
+    WeatherData weather;
+    const bool has_weather = photo_viewer_get_weather(weather);
+    render_weather_icon(weather, has_weather);
+
+    struct tm local;
+    const bool has_time = get_local_time(local);
+
+    if (g_info_weekday_label) {
+        if (has_time) {
+            char buf[32];
+            strftime(buf, sizeof(buf), "%A", &local);
+            for (char* p = buf; *p != '\0'; ++p) {
+                if (*p >= 'a' && *p <= 'z') {
+                    *p = static_cast<char>(*p - 'a' + 'A');
+                }
+            }
+            lv_label_set_text(g_info_weekday_label, buf);
+        } else {
+            lv_label_set_text(g_info_weekday_label, "TODAY");
+        }
+        place_rotated(g_info_weekday_label, 240, 80);
+    }
+
     if (g_info_date_label) {
-        if (display_power_is_ntp_synced()) {
-            char buf[48];
-            const time_t now = time(nullptr);
-            struct tm local;
-            localtime_r(&now, &local);
-            strftime(buf, sizeof(buf), "%A, %B %d", &local);
+        if (has_time) {
+            char buf[32];
+            strftime(buf, sizeof(buf), "%B %d", &local);
             lv_label_set_text(g_info_date_label, buf);
         } else {
             lv_label_set_text(g_info_date_label, "Date unavailable");
         }
+        place_rotated(g_info_date_label, 240, 116);
     }
 
-    if (g_info_weather_label) {
-        WeatherData weather;
-        if (photo_viewer_get_weather(weather)) {
-            lv_label_set_text_fmt(g_info_weather_label, "Outside: %dC, %s", weather.temperature_c, weather.condition_text);
+    render_clock_label();
+
+    if (g_info_temp_label) {
+        if (has_weather) {
+            lv_label_set_text_fmt(g_info_temp_label, "%dC", weather.temperature_c);
         } else {
-            lv_label_set_text(g_info_weather_label, "Weather unavailable");
+            lv_label_set_text(g_info_temp_label, "--C");
         }
+        place_rotated(g_info_temp_label, 320, 390);
     }
 
-    if (g_info_climate_label) {
+    if (g_info_condition_label) {
+        lv_label_set_text(g_info_condition_label,
+                          has_weather && weather.condition_text[0] != '\0'
+                              ? weather.condition_text
+                              : "Weather unavailable");
+        place_rotated(g_info_condition_label, 240, 490);
+    }
+
+    if (g_info_indoor_label) {
         IndoorClimate climate;
         if (photo_viewer_get_indoor_climate(climate)) {
-            lv_label_set_text_fmt(g_info_climate_label, "Indoor: %dC, %d%% humidity", climate.temperature_c, climate.humidity_pct);
+            lv_label_set_text_fmt(g_info_indoor_label, "Indoor %dC  %d%%",
+                                  climate.temperature_c, climate.humidity_pct);
         } else {
-            lv_label_set_text(g_info_climate_label, "Indoor sensor offline");
+            lv_label_set_text(g_info_indoor_label, "Indoor sensor offline");
         }
+        place_rotated(g_info_indoor_label, 240, 610);
+    }
+
+    if (g_info_status_label) {
+        char buf[64];
+        const uint32_t age_min = has_weather ? (millis() - weather.last_success_ms) / 60000u : 0;
+        switch (weather.status) {
+        case WeatherStatus::NoWifi:
+            strlcpy(buf, "No WiFi", sizeof(buf));
+            break;
+        case WeatherStatus::WaitingForTime:
+            strlcpy(buf, "Waiting for time sync", sizeof(buf));
+            break;
+        case WeatherStatus::Fetching:
+            strlcpy(buf, has_weather ? "Updating..." : "Fetching weather...", sizeof(buf));
+            break;
+        case WeatherStatus::Ok:
+            snprintf(buf, sizeof(buf), "Updated %um ago", static_cast<unsigned>(age_min));
+            break;
+        case WeatherStatus::Error:
+            if (has_weather) {
+                snprintf(buf, sizeof(buf), "Updated %um ago (retrying)",
+                         static_cast<unsigned>(age_min));
+            } else {
+                strlcpy(buf, "Weather unavailable", sizeof(buf));
+            }
+            break;
+        default:
+            strlcpy(buf, "Weather unavailable", sizeof(buf));
+            break;
+        }
+        lv_label_set_text(g_info_status_label, buf);
+        place_rotated(g_info_status_label, 240, 700);
+    }
+
+    if (g_info_attribution_label) {
+        place_rotated(g_info_attribution_label, 240, 750);
     }
 }
 
@@ -218,7 +567,7 @@ void show_info_overlay()
     if (!g_info_overlay || g_info_showing) {
         return;
     }
-    render_info_labels();
+    render_info_card();
     lv_obj_move_foreground(g_info_overlay);
     lv_obj_clear_flag(g_info_overlay, LV_OBJ_FLAG_HIDDEN);
     g_info_showing = true;
@@ -368,7 +717,7 @@ bool init_photo_viewer()
     lv_obj_set_style_bg_color(g_index_label, lv_color_hex(0x202020), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(g_index_label, LV_OPA_70, LV_PART_MAIN);
     lv_obj_set_style_pad_all(g_index_label, 4, LV_PART_MAIN);
-    lv_obj_align(g_index_label, LV_ALIGN_BOTTOM_RIGHT, -8, -8);
+    place_rotated(g_index_label, 430, 762);
 
     g_pause_label = lv_label_create(g_screen);
     lv_label_set_text(g_pause_label, LV_SYMBOL_PAUSE " PAUSED");
@@ -376,42 +725,64 @@ bool init_photo_viewer()
     lv_obj_set_style_bg_color(g_pause_label, lv_color_hex(0x202020), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(g_pause_label, LV_OPA_70, LV_PART_MAIN);
     lv_obj_set_style_pad_all(g_pause_label, 8, LV_PART_MAIN);
-    lv_obj_align(g_pause_label, LV_ALIGN_TOP_MID, 0, 16);
+    place_rotated(g_pause_label, 240, 40);
     lv_obj_add_flag(g_pause_label, LV_OBJ_FLAG_HIDDEN);
 
     g_info_overlay = lv_obj_create(g_screen);
     lv_obj_set_size(g_info_overlay, SCREEN_W, SCREEN_H);
     lv_obj_set_pos(g_info_overlay, 0, 0);
-    lv_obj_set_style_bg_color(g_info_overlay, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(g_info_overlay, lv_color_hex(0x0B1020), LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_color(g_info_overlay, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_grad_dir(g_info_overlay, LV_GRAD_DIR_VER, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(g_info_overlay, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(g_info_overlay, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(g_info_overlay, 0, LV_PART_MAIN);
     lv_obj_remove_flag(g_info_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(g_info_overlay, LV_OBJ_FLAG_HIDDEN);
 
-    g_info_date_label = lv_label_create(g_info_overlay);
-    lv_obj_set_style_text_color(g_info_date_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_info_date_label, &lv_font_montserrat_40, LV_PART_MAIN);
-    lv_label_set_text(g_info_date_label, "Date unavailable");
-    lv_obj_align(g_info_date_label, LV_ALIGN_TOP_MID, 0, 48);
+    g_info_weekday_label = make_card_label(&lv_font_montserrat_24, accent_color(), "TODAY");
+    place_rotated(g_info_weekday_label, 240, 80);
 
-    g_info_weather_label = lv_label_create(g_info_overlay);
-    lv_obj_set_style_text_color(g_info_weather_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_info_weather_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_text(g_info_weather_label, "Weather unavailable");
-    lv_obj_align(g_info_weather_label, LV_ALIGN_TOP_MID, 0, 160);
+    g_info_date_label = make_card_label(&lv_font_montserrat_24, body_text_color(), "Date unavailable");
+    place_rotated(g_info_date_label, 240, 116);
 
-    g_info_climate_label = lv_label_create(g_info_overlay);
-    lv_obj_set_style_text_color(g_info_climate_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_info_climate_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_text(g_info_climate_label, "Indoor sensor offline");
-    lv_obj_align(g_info_climate_label, LV_ALIGN_TOP_MID, 0, 200);
+    g_info_clock_label = make_card_label(&lv_font_clock_80, body_text_color(), "--:--");
+    place_rotated(g_info_clock_label, 240, 220);
 
-    g_info_attribution_label = lv_label_create(g_info_overlay);
-    lv_obj_set_style_text_color(g_info_attribution_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_info_attribution_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_text(g_info_attribution_label, "Weather data by Open-Meteo.com (CC BY 4.0)");
-    lv_obj_align(g_info_attribution_label, LV_ALIGN_BOTTOM_MID, 0, -24);
+    g_info_weather_icon = lv_obj_create(g_info_overlay);
+    lv_obj_set_size(g_info_weather_icon, 112, 112);
+    lv_obj_set_style_radius(g_info_weather_icon, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(g_info_weather_icon, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(g_info_weather_icon, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(g_info_weather_icon, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_remove_flag(g_info_weather_icon, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(g_info_weather_icon, weather_icon_draw_cb, LV_EVENT_DRAW_MAIN, nullptr);
+    place_rotated(g_info_weather_icon, 150, 400);
+
+    g_info_temp_label = make_card_label(&lv_font_montserrat_40, body_text_color(), "--C");
+    place_rotated(g_info_temp_label, 320, 390);
+
+    g_info_condition_label = make_card_label(&lv_font_montserrat_24, muted_text_color(), "Weather unavailable");
+    place_rotated(g_info_condition_label, 240, 490);
+
+    g_info_divider = lv_obj_create(g_info_overlay);
+    lv_obj_set_size(g_info_divider, 380, 1);
+    lv_obj_set_style_radius(g_info_divider, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(g_info_divider, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(g_info_divider, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(g_info_divider, accent_color(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(g_info_divider, LV_OPA_40, LV_PART_MAIN);
+    place_rotated(g_info_divider, 240, 560);
+
+    g_info_indoor_label = make_card_label(&lv_font_montserrat_24, body_text_color(), "Indoor sensor offline");
+    place_rotated(g_info_indoor_label, 240, 610);
+
+    g_info_status_label = make_card_label(&lv_font_montserrat_14, muted_text_color(), "No WiFi");
+    place_rotated(g_info_status_label, 240, 700);
+
+    g_info_attribution_label = make_card_label(&lv_font_montserrat_14, muted_text_color(),
+                                               "Weather data by Open-Meteo.com (CC BY 4.0)");
+    place_rotated(g_info_attribution_label, 240, 750);
 
     g_current_index = -1;
     g_last_advance_ms = millis();
@@ -468,6 +839,8 @@ void photo_viewer_tick()
     if (g_info_showing) {
         if (millis() - g_info_show_start_ms >= INFO_HOLD_MS) {
             hide_info_overlay();
+        } else {
+            refresh_clock_if_minute_changed();
         }
         return;
     }
