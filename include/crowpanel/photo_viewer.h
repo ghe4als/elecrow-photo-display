@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <lvgl.h>
 
+#include "crowpanel/weather.h"
+
 namespace crowpanel {
 
 constexpr int MAX_PHOTOS = 256;
@@ -22,12 +24,8 @@ void photo_viewer_handle_event(lv_event_t* event);
 
 void photo_viewer_tick();
 
-struct WeatherData {
-    bool valid;
-    int temperature_c;
-    char condition_text[32];
-    uint32_t updated_ms;
-};
+// WeatherData lives in crowpanel/weather.h; the include above makes
+// crowpanel::WeatherData visible here.
 
 struct IndoorClimate {
     bool valid;

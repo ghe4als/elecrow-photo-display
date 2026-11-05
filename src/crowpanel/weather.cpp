@@ -46,7 +46,7 @@ bool build_url()
     return written > 0 && static_cast<size_t>(written) < sizeof(g_url);
 }
 
-bool fetch_and_parse(WeatherData& out)
+bool fetch_and_parse(crowpanel::WeatherData& out)
 {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("[weather] WiFi not connected; skipping fetch");
@@ -97,7 +97,7 @@ bool fetch_and_parse(WeatherData& out)
     const int code = weather_code.as<int>();
     strlcpy(out.condition_text, wmo_weather_code_to_text(code),
             sizeof(out.condition_text));
-    out.updated_ms = millis();
+    out.last_success_ms = millis();
     out.valid = true;
     return true;
 }
@@ -114,12 +114,14 @@ bool weather_init()
     return true;
 }
 
-bool weather_fetch_blocking(WeatherData& out)
+bool weather_fetch_blocking(crowpanel::WeatherData& out)
 {
     out.valid = false;
+    out.status = crowpanel::WeatherStatus::Error;
     out.temperature_c = 0;
     out.condition_text[0] = '\0';
-    out.updated_ms = 0;
+    out.last_success_ms = 0;
+    out.last_attempt_ms = 0;
 
     // Log the heap watermark around every attempt (success or failure) so the
     // TLS handshake's memory impact stays visible on the serial console.
@@ -132,6 +134,7 @@ bool weather_fetch_blocking(WeatherData& out)
     Serial.printf("[weather] fetch %s (max alloc heap %u -> %u)\n",
                   ok ? "ok" : "failed", (unsigned)heap_before, (unsigned)heap_after);
     if (ok) {
+        out.status = crowpanel::WeatherStatus::Ok;
         Serial.printf("[weather] result: %d C, %s\n", out.temperature_c, out.condition_text);
     }
     return ok;

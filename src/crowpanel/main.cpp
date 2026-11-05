@@ -215,19 +215,14 @@ void weather_task(void*)
             continue;
         }
 
-        WeatherData fetched;
+        crowpanel::WeatherData fetched;
         weather_fetch_blocking(fetched);
+        fetched.last_attempt_ms = millis();
 
-        // Copy into the viewer's snapshot type and publish regardless of
-        // success: a failed fetch carries valid=false so the overlay can
-        // render "Weather unavailable" instead of stale data.
-        crowpanel::WeatherData snapshot;
-        snapshot.valid = fetched.valid;
-        snapshot.temperature_c = fetched.temperature_c;
-        snapshot.updated_ms = fetched.updated_ms;
-        strlcpy(snapshot.condition_text, fetched.condition_text,
-                sizeof(snapshot.condition_text));
-        crowpanel::photo_viewer_set_weather(snapshot);
+        // Publish regardless of success: a failed fetch carries valid=false
+        // so the overlay can render "Weather unavailable" instead of stale
+        // data.
+        crowpanel::photo_viewer_set_weather(fetched);
 
         vTaskDelay(pdMS_TO_TICKS(WEATHER_REFRESH_MIN * 60000UL));
     }
