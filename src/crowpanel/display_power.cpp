@@ -11,7 +11,6 @@ namespace crowpanel {
 namespace {
 
 constexpr uint8_t backlight_pin = 2;
-constexpr uint32_t ntp_sync_interval_ms = 60 * 60 * 1000;
 constexpr uint32_t ntp_initial_timeout_ms = 15000;
 constexpr uint32_t test_pulse_ms = 5000;
 
@@ -20,8 +19,9 @@ enum class State { ACTIVE, DIMMED, OFF };
 State g_state = State::ACTIVE;
 uint32_t g_last_activity_ms = 0;
 uint32_t g_pause_started_ms = 0;
-uint32_t g_last_ntp_sync_ms = 0;
 bool g_ntp_synced = false;
+bool g_ntp_started = false;
+bool g_clock_valid = false;
 bool g_test_off_active = false;
 uint32_t g_test_off_until_ms = 0;
 
@@ -41,6 +41,30 @@ bool is_within_display_hours()
     return local.tm_hour >= DISPLAY_ON_HOUR && local.tm_hour < DISPLAY_OFF_HOUR;
 }
 
+// Start SNTP once, whenever WiFi first becomes connected. Idempotent: a
+// no-op when already started or while offline, so display_power_tick() can
+// call it on every pass without log spam. esp_sntp poll mode keeps resyncing
+// on its own after the first sync, so nothing here invalidates the clock
+// later.
+void start_ntp_if_needed()
+{
+    if (g_ntp_started || WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_set_time_sync_notification_cb([](struct timeval *) {
+        g_ntp_synced = true;
+        g_clock_valid = true;
+        Serial.println("[ntp] synced");
+    });
+    setenv("TZ", "ICT-7", 1);
+    tzset();
+    esp_sntp_init();
+    g_ntp_started = true;
+    Serial.println("[ntp] starting sync ...");
+}
+
 } // namespace
 
 void display_power_init()
@@ -48,31 +72,14 @@ void display_power_init()
     pinMode(backlight_pin, OUTPUT);
     set_backlight(true);
 
-    if (WiFi.status() == WL_CONNECTED) {
-        const int32_t offset_sec = TIMEZONE_UTC_OFFSET_HOURS * 3600;
-        esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-        esp_sntp_setservername(0, "pool.ntp.org");
-        esp_sntp_set_time_sync_notification_cb([](struct timeval *) {
-            g_ntp_synced = true;
-            Serial.println("[ntp] synced");
-        });
-        setenv("TZ", "ICT-7", 1);
-        tzset();
-        esp_sntp_init();
-        g_last_ntp_sync_ms = millis();
-        Serial.println("[ntp] starting sync ...");
-    }
+    start_ntp_if_needed();
 }
 
 void display_power_tick()
 {
-    const uint32_t now = millis();
+    start_ntp_if_needed();
 
-    if (g_ntp_synced && now - g_last_ntp_sync_ms >= ntp_sync_interval_ms) {
-        g_ntp_synced = false;
-        sntp_restart();
-        g_last_ntp_sync_ms = now;
-    }
+    const uint32_t now = millis();
 
     if (photo_viewer_is_paused() && g_pause_started_ms == 0) {
         g_pause_started_ms = now;
@@ -164,7 +171,7 @@ bool display_power_is_active()
 
 bool display_power_is_ntp_synced()
 {
-    return g_ntp_synced;
+    return g_clock_valid;
 }
 
 } // namespace crowpanel
