@@ -52,3 +52,46 @@ const char* wmo_weather_code_to_text(int code) {
     }
     return "Unknown";
 }
+
+WeatherIcon wmo_weather_code_to_icon(int code) {
+    switch (code) {
+    case 0:
+        return WeatherIcon::Clear;
+    case 1:
+    case 2:
+        return WeatherIcon::PartlyCloudy;
+    case 3:
+        return WeatherIcon::Cloudy;
+    case 45:
+    case 48:
+        return WeatherIcon::Fog;
+    case 51:
+    case 53:
+    case 55:
+    case 56:
+    case 57:
+        return WeatherIcon::Drizzle;
+    case 61:
+    case 63:
+    case 65:
+    case 66:
+    case 67:
+    case 80:
+    case 81:
+    case 82:
+        return WeatherIcon::Rain;
+    case 71:
+    case 73:
+    case 75:
+    case 77:
+    case 85:
+    case 86:
+        return WeatherIcon::Snow;
+    case 95:
+    case 96:
+    case 99:
+        return WeatherIcon::Storm;
+    default:
+        return WeatherIcon::Unknown;
+    }
+}

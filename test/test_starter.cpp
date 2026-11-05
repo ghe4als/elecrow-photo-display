@@ -51,6 +51,18 @@ extern void test_weather_all_known_codes(void);
 extern void test_weather_all_codes_non_null(void);
 extern void test_weather_unmapped_codes_unknown(void);
 extern void test_weather_negative_unknown(void);
+extern void test_weather_icon_clear_sky(void);
+extern void test_weather_icon_partly_cloudy(void);
+extern void test_weather_icon_cloudy(void);
+extern void test_weather_icon_fog(void);
+extern void test_weather_icon_drizzle(void);
+extern void test_weather_icon_rain(void);
+extern void test_weather_icon_snow(void);
+extern void test_weather_icon_storm(void);
+extern void test_weather_icon_unknown_code(void);
+extern void test_weather_icon_negative_unknown(void);
+extern void test_weather_icon_all_known_codes(void);
+extern void test_weather_icon_unmapped_codes_unknown(void);
 
 int main(int argc, char** argv) {
     UNITY_BEGIN();
@@ -68,5 +80,17 @@ int main(int argc, char** argv) {
     RUN_TEST(test_weather_all_codes_non_null);
     RUN_TEST(test_weather_unmapped_codes_unknown);
     RUN_TEST(test_weather_negative_unknown);
+    RUN_TEST(test_weather_icon_clear_sky);
+    RUN_TEST(test_weather_icon_partly_cloudy);
+    RUN_TEST(test_weather_icon_cloudy);
+    RUN_TEST(test_weather_icon_fog);
+    RUN_TEST(test_weather_icon_drizzle);
+    RUN_TEST(test_weather_icon_rain);
+    RUN_TEST(test_weather_icon_snow);
+    RUN_TEST(test_weather_icon_storm);
+    RUN_TEST(test_weather_icon_unknown_code);
+    RUN_TEST(test_weather_icon_negative_unknown);
+    RUN_TEST(test_weather_icon_all_known_codes);
+    RUN_TEST(test_weather_icon_unmapped_codes_unknown);
     return UNITY_END();
 }

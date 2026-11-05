@@ -92,3 +92,79 @@ void test_weather_unmapped_codes_unknown(void) {
 void test_weather_negative_unknown(void) {
     TEST_ASSERT_EQUAL_STRING("Unknown", wmo_weather_code_to_text(-1));
 }
+
+// Icon mapping tests. A tiny helper keeps the per-category tests one line
+// each; Unity compares the enum's integer value.
+static void assert_icon(int code, WeatherIcon expected) {
+    TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(expected),
+                                  static_cast<int>(wmo_weather_code_to_icon(code)),
+                                  "wrong icon for WMO code");
+}
+
+void test_weather_icon_clear_sky(void) {
+    assert_icon(0, WeatherIcon::Clear);
+}
+
+void test_weather_icon_partly_cloudy(void) {
+    assert_icon(2, WeatherIcon::PartlyCloudy);
+}
+
+void test_weather_icon_cloudy(void) {
+    assert_icon(3, WeatherIcon::Cloudy);
+}
+
+void test_weather_icon_fog(void) {
+    assert_icon(45, WeatherIcon::Fog);
+}
+
+void test_weather_icon_drizzle(void) {
+    assert_icon(51, WeatherIcon::Drizzle);
+}
+
+void test_weather_icon_rain(void) {
+    assert_icon(61, WeatherIcon::Rain);
+}
+
+void test_weather_icon_snow(void) {
+    assert_icon(71, WeatherIcon::Snow);
+}
+
+void test_weather_icon_storm(void) {
+    assert_icon(95, WeatherIcon::Storm);
+}
+
+void test_weather_icon_unknown_code(void) {
+    assert_icon(9999, WeatherIcon::Unknown);
+}
+
+void test_weather_icon_negative_unknown(void) {
+    assert_icon(-1, WeatherIcon::Unknown);
+}
+
+void test_weather_icon_all_known_codes(void) {
+    // Every code the text table knows must map to a concrete icon category,
+    // never Unknown.
+    for (const ExpectedText& entry : kExpected) {
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(static_cast<int>(WeatherIcon::Unknown),
+                                       static_cast<int>(wmo_weather_code_to_icon(entry.code)),
+                                       "known WMO code must not map to Unknown icon");
+    }
+}
+
+void test_weather_icon_unmapped_codes_unknown(void) {
+    // Any code in 0..99 that is not a defined WMO code must map to Unknown.
+    for (int code = 0; code <= 99; ++code) {
+        bool is_known = false;
+        for (const ExpectedText& entry : kExpected) {
+            if (entry.code == code) {
+                is_known = true;
+                break;
+            }
+        }
+        if (!is_known) {
+            TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(WeatherIcon::Unknown),
+                                           static_cast<int>(wmo_weather_code_to_icon(code)),
+                                           "unmapped code must map to Unknown icon");
+        }
+    }
+}
