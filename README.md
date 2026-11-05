@@ -329,16 +329,28 @@ It stays on screen for 10 seconds, then the slideshow resumes from the same
 photo. Touch input is ignored while the card is visible, so a tap will not toggle
 pause during the hold.
 
+The card is laid out for the physically portrait-mounted panel: the framebuffer
+stays 800x480, but every card element is drawn in a 480x800 logical space and
+rotated 90 degrees clockwise to read upright (the same direction
+`scripts/prepare_photos.py` uses for the photos). The photo counter and the
+`PAUSED` badge are rotated the same way.
+
 The card displays:
 
-- Current date, formatted as weekday, month, and day. Before NTP sync the date
-  line shows `Date unavailable`.
+- Weekday and date, formatted as separate accent and body lines. Before NTP
+  sync the date line shows `Date unavailable`.
+- A large 24-hour `HH:MM` clock using a digits-only 80 px font. Before NTP sync
+  it shows `--:--`.
 - Outdoor weather from Open-Meteo for the default Vietnam location
-  (`12.864506604834714, 107.97442705894242`), shown as temperature in Celsius
-  and a short condition text such as `Clear sky` or `Rain`. No API key is
-  required.
+  (`12.864506604834714, 107.97442705894242`): a vector weather icon, the
+  temperature in Celsius, and a short condition text such as `Clear sky` or
+  `Rain`. Icons are drawn with LVGL primitives (no bitmap assets) from the WMO
+  weather code. No API key is required.
 - Indoor temperature and humidity from the DHT20 sensor on the I2C bus. If the
   sensor is missing or a read fails, the card shows `Indoor sensor offline`.
+- A freshness/status line that distinguishes `No WiFi`, `Waiting for time sync`,
+  `Fetching weather...`, `Weather unavailable`, `Updated <n>m ago`, and
+  `Updated <n>m ago (retrying)`.
 
 The bottom of the card shows the required attribution line:
 
@@ -347,9 +359,18 @@ The bottom of the card shows the required attribution line:
 Network and sensor reads are kept off the LVGL task so the UI stays responsive.
 Weather is fetched over HTTPS by a dedicated `weather_task` FreeRTOS task
 pinned to core 0, refreshed on the `WEATHER_REFRESH_MIN` cadence (default: 60
-minutes). The DHT20 is polled every 30 seconds by a separate `dht20_task` on
-core 0; each read blocks about 80 ms, so running it on its own task prevents
-LVGL stutter.
+minutes). A failed fetch never wipes the last good reading: the card keeps the
+last values and retries after 120 seconds. SNTP starts as soon as WiFi becomes
+connected (including a late connection after boot), and the clock stays valid
+across the periodic resync. The DHT20 is polled every 30 seconds by a separate
+`dht20_task` on core 0; each read blocks about 80 ms, so running it on its own
+task prevents LVGL stutter.
+
+Rotated elements allocate full-size transform layers, so `setup()` adds a
+1 MB PSRAM-backed LVGL pool when PSRAM is present (with a serial log of the
+result). Small allocations still come from the internal 64 KB pool first. The
+firmware stays below the 3 MB application partition; no bitmap icon assets are
+added.
 
 ### Configuring the weather location
 
@@ -378,9 +399,10 @@ You can also pass latitude and longitude on the command line:
 pio run -e crowpanel-5 -- -DWEATHER_LAT='"12.8645066"' -DWEATHER_LON='"107.9744271"' -DWEATHER_REFRESH_MIN=90
 ```
 
-If weather data is missing or WiFi is offline, the card shows
-`Weather unavailable`. The first successful fetch may take a few minutes after
-boot, depending on when the task runs and whether NTP has already synced.
+If weather data is missing or WiFi is offline, the status line explains why
+(`No WiFi`, `Waiting for time sync`, or `Weather unavailable`). The first
+successful fetch may take a few minutes after boot, depending on when the task
+runs and whether NTP has already synced.
 
 ## Versions this starter was verified with
 
