@@ -5,6 +5,7 @@
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
 #include <lvgl.h>
+#include <esp32-hal-psram.h>
 
 #include "wifi_config.h"
 #include "crowpanel/touch.h"
@@ -204,27 +205,53 @@ TaskHandle_t weather_task_handle = nullptr;
  *
  *  weather_fetch_blocking() blocks up to ~10 s on the TLS handshake and
  *  HTTPS GET, so it must never run inside the LVGL ui_task or an LVGL timer.
- *  The task waits for WiFi + NTP, then fetches and republishes the result on
- *  the WEATHER_REFRESH_MIN cadence.
+ *  The task waits for WiFi + NTP, publishes a status enum alongside the
+ *  last-good values, and retries failures after 120 s instead of a full
+ *  WEATHER_REFRESH_MIN cycle.
  */
 void weather_task(void*)
 {
+    // Last-good snapshot; valid stays false until the first successful fetch.
+    static crowpanel::WeatherData g_last_good = {};
+
+    // Publish the last-good values with only the status overwritten, so an
+    // error or offline stretch never wipes what the card already shows.
+    auto publish_with_status = [&](crowpanel::WeatherStatus status) {
+        crowpanel::WeatherData snapshot = g_last_good;
+        snapshot.status = status;
+        snapshot.last_attempt_ms = millis();
+        crowpanel::photo_viewer_set_weather(snapshot);
+    };
+
     for (;;) {
-        if (!crowpanel::display_power_is_ntp_synced() || WiFi.status() != WL_CONNECTED) {
+        if (WiFi.status() != WL_CONNECTED) {
+            publish_with_status(crowpanel::WeatherStatus::NoWifi);
+            vTaskDelay(pdMS_TO_TICKS(10000));
+            continue;
+        }
+        if (!crowpanel::display_power_is_ntp_synced()) {
+            publish_with_status(crowpanel::WeatherStatus::WaitingForTime);
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
         }
 
-        crowpanel::WeatherData fetched;
+        crowpanel::WeatherData fetched = g_last_good; // keeps last-good if the fetch fails mid-way
+        publish_with_status(crowpanel::WeatherStatus::Fetching);
         weather_fetch_blocking(fetched);
         fetched.last_attempt_ms = millis();
 
-        // Publish regardless of success: a failed fetch carries valid=false
-        // so the overlay can render "Weather unavailable" instead of stale
-        // data.
-        crowpanel::photo_viewer_set_weather(fetched);
-
-        vTaskDelay(pdMS_TO_TICKS(WEATHER_REFRESH_MIN * 60000UL));
+        if (fetched.valid) {
+            g_last_good = fetched;
+            g_last_good.status = crowpanel::WeatherStatus::Ok;
+            crowpanel::photo_viewer_set_weather(g_last_good);
+            Serial.printf("[weather] published ok (%d C, %s)\n",
+                          g_last_good.temperature_c, g_last_good.condition_text);
+            vTaskDelay(pdMS_TO_TICKS(WEATHER_REFRESH_MIN * 60000UL));
+        } else {
+            publish_with_status(crowpanel::WeatherStatus::Error);
+            Serial.println("[weather] fetch failed; keeping last-good, retry in 120 s");
+            vTaskDelay(pdMS_TO_TICKS(120000));
+        }
     }
 }
 
@@ -304,6 +331,22 @@ void setup()
 
     lv_init();
     lv_tick_set_cb(lvgl_tick);
+
+    // PSRAM-backed LVGL pool: rotated info-card elements allocate transform
+    // layers larger than the built-in 64 KB pool; small allocations keep
+    // coming from the internal pool first.
+    if (psramFound()) {
+        constexpr size_t k_lvgl_psram_pool_size = 1024 * 1024;
+        void* pool = ps_malloc(k_lvgl_psram_pool_size);
+        if (pool) {
+            lv_mem_add_pool(pool, k_lvgl_psram_pool_size);
+            Serial.printf("[lvgl] psram pool %u bytes (psram total %u)\n",
+                          (unsigned)k_lvgl_psram_pool_size, (unsigned)ESP.getPsramSize());
+        } else {
+            Serial.println("[lvgl] psram pool alloc failed; internal pool only");
+        }
+    }
+
     delay(100);
 
     touch_init();
