@@ -5,6 +5,7 @@
 #include <lvgl.h>
 #include "crowpanel/sdcard.h"
 #include "crowpanel/display_power.h"
+#include "crowpanel/dht20.h"
 #include "weather_utils.h"
 
 extern "C" {
@@ -24,6 +25,12 @@ constexpr int32_t LOGICAL_H = 800;
 constexpr int32_t INFO_CARD_ROTATION = 900;
 static_assert(LOGICAL_W == SCREEN_H && LOGICAL_H == SCREEN_W,
               "portrait logical space must mirror the framebuffer");
+
+#if ENABLE_DHT20
+constexpr const char* kIndoorOfflineText = "Indoor sensor offline";
+#else
+constexpr const char* kIndoorOfflineText = "Indoor sensor not installed";
+#endif
 
 constexpr int16_t SWIPE_THRESHOLD_PX = 60;
 constexpr int16_t SWIPE_MAX_VERTICAL_DRIFT_PX = 80;
@@ -520,7 +527,7 @@ void render_info_card()
             lv_label_set_text_fmt(g_info_indoor_label, "Indoor %dC  %d%%",
                                   climate.temperature_c, climate.humidity_pct);
         } else {
-            lv_label_set_text(g_info_indoor_label, "Indoor sensor offline");
+            lv_label_set_text(g_info_indoor_label, kIndoorOfflineText);
         }
         place_rotated(g_info_indoor_label, 240, 610);
     }
@@ -774,7 +781,7 @@ bool init_photo_viewer()
     lv_obj_set_style_bg_opa(g_info_divider, LV_OPA_40, LV_PART_MAIN);
     place_rotated(g_info_divider, 240, 560);
 
-    g_info_indoor_label = make_card_label(&lv_font_montserrat_24, body_text_color(), "Indoor sensor offline");
+    g_info_indoor_label = make_card_label(&lv_font_montserrat_24, body_text_color(), kIndoorOfflineText);
     place_rotated(g_info_indoor_label, 240, 610);
 
     g_info_status_label = make_card_label(&lv_font_montserrat_14, muted_text_color(), "No WiFi");

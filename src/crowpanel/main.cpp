@@ -138,6 +138,7 @@ TaskHandle_t ui_task_handle = nullptr;
     }
 }
 
+#if ENABLE_DHT20
 constexpr uint32_t dht20_poll_interval_ms = 30000;
 constexpr uint32_t dht20_max_consecutive_failures = 3;
 constexpr uint32_t dht20_task_stack_words = 2048; // 8 KB
@@ -196,6 +197,7 @@ void dht20_task(void*)
         vTaskDelay(pdMS_TO_TICKS(dht20_poll_interval_ms));
     }
 }
+#endif
 
 constexpr uint32_t weather_task_stack_words = 8192; // 32 KB (TLS handshake + JSON parse)
 constexpr UBaseType_t weather_task_priority = 1;
@@ -313,10 +315,14 @@ void setup()
     // Probe the DHT20 once. When it is missing (or the bus is broken) the
     // polling task is never created, so the driver cannot spam
     // ESP_ERR_INVALID_STATE every 30 s.
+#if ENABLE_DHT20
     const bool dht20_ready = dht20_init();
     if (!dht20_ready) {
         Serial.println("[main] DHT20 init failed; indoor sensor offline");
     }
+#else
+    Serial.println("[main] DHT20 disabled by build flag");
+#endif
     pinMode(led_pin, OUTPUT);
     set_led(false);
 
@@ -395,6 +401,7 @@ void setup()
     // Poll the DHT20 on core 0 so its ~80 ms reads never stall LVGL on core 1.
     // Spawn it only after the boot probe succeeded; otherwise the task would
     // keep hitting the dead bus every 30 s and flood the log.
+#if ENABLE_DHT20
     if (dht20_ready) {
         BaseType_t dht20_created = xTaskCreatePinnedToCore(
             dht20_task, "dht20Task", dht20_task_stack_words, nullptr,
@@ -405,6 +412,7 @@ void setup()
             Serial.println("[main] DHT20 task started");
         }
     }
+#endif
 
     // Fetch weather on core 0; the ~10 s HTTPS calls must never stall LVGL.
     BaseType_t weather_created = xTaskCreatePinnedToCore(
