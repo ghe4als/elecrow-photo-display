@@ -1,10 +1,19 @@
 #include "crowpanel/photo_viewer.h"
 
 #include <time.h>
+#include <string.h>
 
+#include <Arduino.h>
+#include <SD.h>
 #include <lvgl.h>
+#include "src/draw/sw/lv_draw_sw.h"
 #include "crowpanel/sdcard.h"
 #include "crowpanel/display_power.h"
+
+extern "C" {
+#include <esp_heap_caps.h>
+#include <esp_cache.h>
+}
 
 namespace crowpanel {
 
@@ -19,7 +28,7 @@ constexpr int16_t SWIPE_MAX_VERTICAL_DRIFT_PX = 80;
 constexpr uint32_t TAP_MAX_DURATION_MS = 400;
 constexpr uint32_t SWIPE_MAX_DURATION_MS = 500;
 
-constexpr uint32_t FADE_DURATION_MS = 350;
+constexpr uint32_t FADE_DURATION_MS = 0;
 constexpr uint32_t FADE_TICK_MS = 16;
 
 String g_photos[MAX_PHOTOS];
@@ -33,15 +42,21 @@ lv_obj_t* g_image = nullptr;
 lv_obj_t* g_index_label = nullptr;
 lv_obj_t* g_pause_label = nullptr;
 
+lv_color_t* g_photo_buf = nullptr;
+lv_image_dsc_t g_photo_dsc = {};
+
 int g_photos_since_info = 0;
 bool g_info_showing = false;
 uint32_t g_info_show_start_ms = 0;
 
 lv_obj_t* g_info_overlay = nullptr;
-lv_obj_t* g_info_date_label = nullptr;
-lv_obj_t* g_info_weather_label = nullptr;
-lv_obj_t* g_info_climate_label = nullptr;
-lv_obj_t* g_info_attribution_label = nullptr;
+lv_obj_t* g_info_image = nullptr;
+
+constexpr uint16_t CARD_W = 480;
+constexpr uint16_t CARD_H = 800;
+lv_color_t* g_card_portrait_buf = nullptr;
+lv_color_t* g_card_frame_buf = nullptr;
+lv_image_dsc_t g_card_image_dsc = {};
 
 WeatherData g_cached_weather = {};
 IndoorClimate g_cached_climate = {};
@@ -68,6 +83,36 @@ void apply_opacity()
     lv_obj_set_style_image_opa(g_image, g_fade_opa, LV_PART_MAIN);
 }
 
+bool load_raw_photo(const char* raw_path)
+{
+    if (!g_photo_buf) {
+        return false;
+    }
+    File f = SD.open(raw_path, "r");
+    if (!f) {
+        Serial.printf("[photo] no raw file: %s\n", raw_path);
+        return false;
+    }
+    const size_t expected = SCREEN_W * SCREEN_H * sizeof(lv_color_t);
+    if (f.size() != static_cast<long>(expected)) {
+        Serial.printf("[photo] raw size mismatch: %ld != %u\n", f.size(), (unsigned)expected);
+        f.close();
+        return false;
+    }
+    const size_t read = f.read(reinterpret_cast<uint8_t*>(g_photo_buf), expected);
+    f.close();
+    if (read != expected) {
+        Serial.printf("[photo] raw read failed: %u != %u\n", (unsigned)read, (unsigned)expected);
+        return false;
+    }
+    esp_cache_msync(g_photo_buf, expected, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+
+    lv_image_set_scale(g_image, SCALE_NONE);
+    lv_image_set_rotation(g_image, 0);
+    lv_image_set_src(g_image, &g_photo_dsc);
+    return true;
+}
+
 void load_photo_now(int index)
 {
     if (g_photo_count == 0 || index < 0 || index >= g_photo_count) {
@@ -78,12 +123,19 @@ void load_photo_now(int index)
     const String path = String("S:/photos") + g_photos[index];
     Serial.printf("[photo] loading %s\n", path.c_str());
 
+    const String raw_path = String("/photos") + g_photos[index].substring(0, g_photos[index].lastIndexOf('.')) + ".raw";
+    if (load_raw_photo(raw_path.c_str())) {
+        Serial.println("[photo] loaded raw RGB565");
+        if (g_index_label) {
+            lv_label_set_text_fmt(g_index_label, "%d / %d", index + 1, g_photo_count);
+        }
+        return;
+    }
+
     lv_image_header_t header;
     lv_result_t info = lv_image_decoder_get_info(path.c_str(), &header);
     if (info != LV_RESULT_OK) {
         Serial.printf("[photo] decoder_get_info failed for %s\n", path.c_str());
-        lv_image_set_scale(g_image, SCALE_NONE);
-        apply_opacity();
         if (g_index_label) {
             lv_label_set_text_fmt(g_index_label, "%d / %d (bad file)", index + 1, g_photo_count);
         }
@@ -92,20 +144,18 @@ void load_photo_now(int index)
 
     Serial.printf("[photo] header %dx%d cf=%d\n", header.w, header.h, header.cf);
     lv_image_set_src(g_image, path.c_str());
+    lv_image_set_scale(g_image, SCALE_NONE);
+    lv_image_set_rotation(g_image, 0);
 
     if (header.w > 0 && header.h > 0) {
         const int32_t scale_x = (int32_t)SCREEN_W * SCALE_NONE / header.w;
         const int32_t scale_y = (int32_t)SCREEN_H * SCALE_NONE / header.h;
         const int32_t scale = (scale_x < scale_y) ? scale_x : scale_y;
-        lv_image_set_scale(g_image, (uint32_t)scale);
-        lv_image_set_rotation(g_image, 0);
+        if (scale != SCALE_NONE) {
+            lv_image_set_scale(g_image, (uint32_t)scale);
+        }
         Serial.printf("[photo] header %dx%d scale %d\n", header.w, header.h, scale);
-    } else {
-        lv_image_set_scale(g_image, SCALE_NONE);
-        lv_image_set_rotation(g_image, 0);
     }
-
-    apply_opacity();
 
     if (g_index_label) {
         lv_label_set_text_fmt(g_index_label, "%d / %d", index + 1, g_photo_count);
@@ -117,15 +167,7 @@ void load_photo(int index)
     if (g_photo_count == 0 || index < 0 || index >= g_photo_count) {
         return;
     }
-    if (!g_image) {
-        load_photo_now(index);
-        return;
-    }
-    g_pending_index = index;
-    g_fade_state = FadeState::FADING_OUT;
-    g_fade_start_ms = millis();
-    g_fade_opa = LV_OPA_COVER;
-    apply_opacity();
+    load_photo_now(index);
 }
 
 void update_fade()
@@ -179,38 +221,137 @@ void update_pause_overlay()
     }
 }
 
-void render_info_labels()
+void draw_card_label(lv_layer_t* layer, const char* text, int32_t y, const lv_font_t* font)
 {
-    if (g_info_date_label) {
-        if (display_power_is_ntp_synced()) {
-            char buf[48];
-            const time_t now = time(nullptr);
-            struct tm local;
-            localtime_r(&now, &local);
-            strftime(buf, sizeof(buf), "%A, %B %d", &local);
-            lv_label_set_text(g_info_date_label, buf);
-        } else {
-            lv_label_set_text(g_info_date_label, "Date unavailable");
-        }
+    lv_draw_label_dsc_t dsc;
+    lv_draw_label_dsc_init(&dsc);
+    dsc.text = text;
+    dsc.font = font;
+    dsc.color = lv_color_white();
+    dsc.align = LV_TEXT_ALIGN_CENTER;
+    dsc.opa = LV_OPA_COVER;
+
+    const int32_t band = lv_font_get_line_height(font) + 8;
+    lv_area_t area = {0, y - band / 2, CARD_W - 1, y + band / 2};
+    layer->_clip_area = (lv_area_t){0, 0, CARD_W - 1, CARD_H - 1};
+
+    lv_draw_label(layer, &dsc, &area);
+}
+
+void draw_card_line(lv_layer_t* layer, int32_t y, int32_t width)
+{
+    lv_draw_line_dsc_t dsc;
+    lv_draw_line_dsc_init(&dsc);
+    dsc.color = lv_color_hex(0x58C4DC);
+    dsc.width = 2;
+    dsc.opa = LV_OPA_50;
+    dsc.round_start = 0;
+    dsc.round_end = 0;
+    dsc.p1.x = (CARD_W - width) / 2;
+    dsc.p1.y = y;
+    dsc.p2.x = CARD_W - dsc.p1.x;
+    dsc.p2.y = y;
+    layer->_clip_area = (lv_area_t){0, 0, CARD_W - 1, CARD_H - 1};
+
+    lv_draw_line(layer, &dsc);
+}
+
+void render_info_card()
+{
+    if (!g_card_portrait_buf || !g_card_frame_buf) {
+        return;
     }
 
-    if (g_info_weather_label) {
-        WeatherData weather;
-        if (photo_viewer_get_weather(weather)) {
-            lv_label_set_text_fmt(g_info_weather_label, "Outside: %dC, %s", weather.temperature_c, weather.condition_text);
-        } else {
-            lv_label_set_text(g_info_weather_label, "Weather unavailable");
-        }
-    }
+    lv_obj_t* canvas = lv_canvas_create(nullptr);
+    lv_canvas_set_buffer(canvas, g_card_portrait_buf, CARD_W, CARD_H, LV_COLOR_FORMAT_RGB565);
 
-    if (g_info_climate_label) {
-        IndoorClimate climate;
-        if (photo_viewer_get_indoor_climate(climate)) {
-            lv_label_set_text_fmt(g_info_climate_label, "Indoor: %dC, %d%% humidity", climate.temperature_c, climate.humidity_pct);
-        } else {
-            lv_label_set_text(g_info_climate_label, "Indoor sensor offline");
-        }
+    lv_layer_t layer;
+    lv_canvas_init_layer(canvas, &layer);
+
+    lv_draw_rect_dsc_t bg_dsc;
+    lv_draw_rect_dsc_init(&bg_dsc);
+    bg_dsc.bg_color = lv_color_hex(0x0B1020);
+    bg_dsc.bg_opa = LV_OPA_COVER;
+    bg_dsc.radius = 0;
+    lv_area_t full = {0, 0, CARD_W - 1, CARD_H - 1};
+    layer._clip_area = full;
+    lv_draw_rect(&layer, &bg_dsc, &full);
+
+    const bool has_time = display_power_is_ntp_synced();
+
+    char date_buf[48];
+    if (has_time) {
+        const time_t now = time(nullptr);
+        struct tm local;
+        localtime_r(&now, &local);
+        strftime(date_buf, sizeof(date_buf), "%A, %B %d", &local);
+    } else {
+        strlcpy(date_buf, "Saturday, November 09", sizeof(date_buf));
     }
+    draw_card_label(&layer, date_buf, 40, &lv_font_montserrat_24);
+
+    char clock_buf[16];
+    if (has_time) {
+        const time_t now = time(nullptr);
+        struct tm local;
+        localtime_r(&now, &local);
+        strftime(clock_buf, sizeof(clock_buf), "%H:%M", &local);
+    } else {
+        strlcpy(clock_buf, "21:47", sizeof(clock_buf));
+    }
+    draw_card_label(&layer, clock_buf, 110, &lv_font_montserrat_40);
+
+    WeatherData weather;
+    char temp_buf[16];
+    char cond_buf[32];
+    if (photo_viewer_get_weather(weather)) {
+        snprintf(temp_buf, sizeof(temp_buf), "%d C", weather.temperature_c);
+        strlcpy(cond_buf, weather.condition_text, sizeof(cond_buf));
+    } else {
+        strlcpy(temp_buf, "27 C", sizeof(temp_buf));
+        strlcpy(cond_buf, "Clear sky", sizeof(cond_buf));
+    }
+    draw_card_label(&layer, temp_buf, 220, &lv_font_montserrat_40);
+    draw_card_label(&layer, cond_buf, 260, &lv_font_montserrat_24);
+
+    draw_card_line(&layer, 320, 360);
+
+    IndoorClimate climate;
+    char climate_buf[48];
+    if (photo_viewer_get_indoor_climate(climate)) {
+        snprintf(climate_buf, sizeof(climate_buf), "Indoor: %dC, %d%%", climate.temperature_c, climate.humidity_pct);
+    } else {
+        strlcpy(climate_buf, "Indoor: 24C, 55%", sizeof(climate_buf));
+    }
+    draw_card_label(&layer, climate_buf, 380, &lv_font_montserrat_24);
+
+    draw_card_label(&layer, "Weather data by Open-Meteo.com (CC BY 4.0)", 770, &lv_font_montserrat_14);
+
+    lv_canvas_finish_layer(canvas, &layer);
+
+    const lv_draw_buf_t* canvas_draw_buf = lv_canvas_get_draw_buf(canvas);
+    const uint32_t src_stride = canvas_draw_buf ? canvas_draw_buf->header.stride : CARD_W * sizeof(lv_color_t);
+    Serial.printf("[photo] canvas stride=%u\n", (unsigned)src_stride);
+
+    const size_t portrait_bytes = CARD_W * CARD_H * sizeof(lv_color_t);
+    esp_cache_msync(g_card_portrait_buf, portrait_bytes,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+
+    lv_draw_sw_rotate(canvas_draw_buf ? canvas_draw_buf->data : reinterpret_cast<const uint8_t*>(g_card_portrait_buf),
+                       g_card_frame_buf,
+                       CARD_W, CARD_H,
+                       src_stride,
+                       SCREEN_W * sizeof(lv_color_t),
+                       LV_DISPLAY_ROTATION_90,
+                       LV_COLOR_FORMAT_RGB565);
+
+    const size_t frame_bytes = SCREEN_W * SCREEN_H * sizeof(lv_color_t);
+    esp_cache_msync(g_card_frame_buf, frame_bytes,
+                    ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+
+    lv_obj_delete(canvas);
+
+    lv_obj_invalidate(g_info_image);
 }
 
 void show_info_overlay()
@@ -218,7 +359,7 @@ void show_info_overlay()
     if (!g_info_overlay || g_info_showing) {
         return;
     }
-    render_info_labels();
+    render_info_card();
     lv_obj_move_foreground(g_info_overlay);
     lv_obj_clear_flag(g_info_overlay, LV_OBJ_FLAG_HIDDEN);
     g_info_showing = true;
@@ -383,35 +524,49 @@ bool init_photo_viewer()
     lv_obj_set_size(g_info_overlay, SCREEN_W, SCREEN_H);
     lv_obj_set_pos(g_info_overlay, 0, 0);
     lv_obj_set_style_bg_color(g_info_overlay, lv_color_black(), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(g_info_overlay, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(g_info_overlay, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(g_info_overlay, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(g_info_overlay, 0, LV_PART_MAIN);
     lv_obj_remove_flag(g_info_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(g_info_overlay, LV_OBJ_FLAG_HIDDEN);
 
-    g_info_date_label = lv_label_create(g_info_overlay);
-    lv_obj_set_style_text_color(g_info_date_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_info_date_label, &lv_font_montserrat_40, LV_PART_MAIN);
-    lv_label_set_text(g_info_date_label, "Date unavailable");
-    lv_obj_align(g_info_date_label, LV_ALIGN_TOP_MID, 0, 48);
+    const size_t photo_bytes = SCREEN_W * SCREEN_H * sizeof(lv_color_t);
+    const size_t portrait_bytes = CARD_W * CARD_H * sizeof(lv_color_t);
+    const size_t frame_bytes = SCREEN_W * SCREEN_H * sizeof(lv_color_t);
+    g_photo_buf = static_cast<lv_color_t*>(heap_caps_malloc(photo_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    g_card_portrait_buf = static_cast<lv_color_t*>(heap_caps_malloc(portrait_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    g_card_frame_buf = static_cast<lv_color_t*>(heap_caps_malloc(frame_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!g_photo_buf || !g_card_portrait_buf || !g_card_frame_buf) {
+        Serial.println("[photo] failed to allocate PSRAM buffers");
+        return false;
+    }
+    Serial.printf("[photo] PSRAM buffers: photo %u, card %u + %u bytes\n",
+                  (unsigned)photo_bytes, (unsigned)portrait_bytes, (unsigned)frame_bytes);
 
-    g_info_weather_label = lv_label_create(g_info_overlay);
-    lv_obj_set_style_text_color(g_info_weather_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_info_weather_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_text(g_info_weather_label, "Weather unavailable");
-    lv_obj_align(g_info_weather_label, LV_ALIGN_TOP_MID, 0, 160);
+    lv_memset(g_photo_buf, 0, photo_bytes);
+    g_photo_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    g_photo_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    g_photo_dsc.header.w = SCREEN_W;
+    g_photo_dsc.header.h = SCREEN_H;
+    g_photo_dsc.header.stride = SCREEN_W * sizeof(lv_color_t);
+    g_photo_dsc.header.flags = LV_IMAGE_FLAGS_MODIFIABLE;
+    g_photo_dsc.data_size = photo_bytes;
+    g_photo_dsc.data = reinterpret_cast<const uint8_t*>(g_photo_buf);
 
-    g_info_climate_label = lv_label_create(g_info_overlay);
-    lv_obj_set_style_text_color(g_info_climate_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_info_climate_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_text(g_info_climate_label, "Indoor sensor offline");
-    lv_obj_align(g_info_climate_label, LV_ALIGN_TOP_MID, 0, 200);
+    lv_memset(g_card_frame_buf, 0, frame_bytes);
+    g_card_image_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    g_card_image_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    g_card_image_dsc.header.w = SCREEN_W;
+    g_card_image_dsc.header.h = SCREEN_H;
+    g_card_image_dsc.header.stride = SCREEN_W * sizeof(lv_color_t);
+    g_card_image_dsc.header.flags = LV_IMAGE_FLAGS_MODIFIABLE;
+    g_card_image_dsc.data_size = frame_bytes;
+    g_card_image_dsc.data = reinterpret_cast<const uint8_t*>(g_card_frame_buf);
 
-    g_info_attribution_label = lv_label_create(g_info_overlay);
-    lv_obj_set_style_text_color(g_info_attribution_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(g_info_attribution_label, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_label_set_text(g_info_attribution_label, "Weather data by Open-Meteo.com (CC BY 4.0)");
-    lv_obj_align(g_info_attribution_label, LV_ALIGN_BOTTOM_MID, 0, -24);
+    g_info_image = lv_image_create(g_info_overlay);
+    lv_obj_set_size(g_info_image, SCREEN_W, SCREEN_H);
+    lv_obj_set_pos(g_info_image, 0, 0);
+    lv_image_set_src(g_info_image, &g_card_image_dsc);
 
     g_current_index = -1;
     g_last_advance_ms = millis();

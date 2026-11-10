@@ -23,6 +23,8 @@ except ImportError:
 SCREEN_W = 800
 SCREEN_H = 480
 SUPPORTED_INPUT = {".heic", ".heif", ".jpg", ".jpeg", ".png"}
+RAW_RGB565_FORMAT = "RGB;16"
+
 
 
 def supported(path: Path) -> bool:
@@ -119,6 +121,10 @@ def prepare_with_pillow(src: Path, dst: Path, width: int, height: int, *, fit_in
                 print("  cropped to fill screen")
 
             canvas.save(dst, "JPEG", quality=92, optimize=True)
+
+            raw_dst = dst.with_suffix(".raw")
+            raw_bytes = canvas.tobytes("raw", RAW_RGB565_FORMAT)
+            raw_dst.write_bytes(raw_bytes)
         return True
     except Exception as e:
         print(f"Pillow processing failed for {src}: {e}")
