@@ -4,6 +4,10 @@
 #include <SD.h>
 #include <lvgl.h>
 
+extern "C" {
+#include <esp_heap_caps.h>
+}
+
 namespace crowpanel {
 
 namespace {
@@ -183,6 +187,113 @@ int list_photo_files(const char* dirname, String* out_paths, int max_count)
         file = root.openNextFile();
     }
     return count;
+}
+
+int load_photo_index(const char* dirname, PhotoIndex& out, size_t reserve_bytes, int ceiling)
+{
+    out.name_arena = nullptr;
+    out.offsets = nullptr;
+    out.count = 0;
+    out.on_card_count = 0;
+
+    if (!g_sd_ready) {
+        return -1;
+    }
+    File root = SD.open(dirname);
+    if (!root || !root.isDirectory()) {
+        return -1;
+    }
+
+    // Pass 1: record every matching filename's length (strlen + 1) in a PSRAM
+    // scratch array that doubles on demand. on_card_count is the TRUE total,
+    // never capped by `ceiling`, so ceiling-truncation stays visible to the
+    // caller's log.
+    size_t cap = 256;
+    uint32_t* name_lengths = static_cast<uint32_t*>(
+        heap_caps_malloc(cap * sizeof(uint32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!name_lengths) {
+        return 0;
+    }
+    int total = 0;
+    File file = root.openNextFile();
+    while (file) {
+        if (!file.isDirectory()) {
+            const char* name = file.name();
+            if (name[0] != '.' && is_photo_file(name)) {
+                if ((size_t)total == cap) {
+                    uint32_t* grown = static_cast<uint32_t*>(
+                        heap_caps_realloc(name_lengths, cap * 2 * sizeof(uint32_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+                    if (!grown) {
+                        break;  // scratch cannot grow; keep the lengths gathered so far
+                    }
+                    name_lengths = grown;
+                    cap *= 2;
+                }
+                name_lengths[total++] = static_cast<uint32_t>(strlen(name) + 1);
+            }
+        }
+        file = root.openNextFile();
+    }
+    out.on_card_count = total;
+
+    const size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t budget = psram_free > reserve_bytes ? psram_free - reserve_bytes : 0;
+    const int load_count = compute_load_count(name_lengths, out.on_card_count, budget, ceiling);
+    if (load_count == 0) {
+        heap_caps_free(name_lengths);
+        return 0;
+    }
+
+    File root2 = SD.open(dirname);
+    if (!root2 || !root2.isDirectory()) {
+        heap_caps_free(name_lengths);
+        return 0;
+    }
+
+    size_t arena_bytes = 0;
+    for (int i = 0; i < load_count; ++i) {
+        arena_bytes += name_lengths[i];
+    }
+    out.name_arena = static_cast<char*>(
+        heap_caps_malloc(arena_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    out.offsets = static_cast<uint32_t*>(
+        heap_caps_malloc(load_count * sizeof(uint32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!out.name_arena || !out.offsets) {
+        heap_caps_free(out.name_arena);
+        heap_caps_free(out.offsets);
+        heap_caps_free(name_lengths);
+        out.name_arena = nullptr;
+        out.offsets = nullptr;
+        out.count = 0;
+        return 0;
+    }
+
+    // Pass 2: copy the first load_count bare filenames into the arena. It was
+    // sized from the exact pass-1 lengths, so the room guard only fires if the
+    // card changed between passes.
+    int stored = 0;
+    uint32_t offset = 0;
+    File file2 = root2.openNextFile();
+    while (file2 && stored < load_count) {
+        if (!file2.isDirectory()) {
+            const char* name = file2.name();
+            if (name[0] != '.' && is_photo_file(name)) {
+                const size_t name_len = strlen(name) + 1;
+                if ((size_t)offset + name_len > arena_bytes) {
+                    break;
+                }
+                strcpy(out.name_arena + offset, name);
+                out.offsets[stored] = offset;
+                offset += name_len;
+                ++stored;
+            }
+        }
+        file2 = root2.openNextFile();
+    }
+    heap_caps_free(name_lengths);
+    out.count = stored;
+    return out.count;
 }
 
 void register_lvgl_sd_fs()

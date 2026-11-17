@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <FS.h>
 
+#include "crowpanel/photo_index.h"
+
 namespace crowpanel {
 
 // CrowPanel 5.0" HMI V3.0 TF card is wired to SPI with these pins.
@@ -20,10 +22,18 @@ bool sd_ready();
 // Access the mounted SD file system. Check sd_ready() first.
 fs::FS& get_sd_fs();
 
-// Scan a directory on the SD card for JPEG/PNG/BMP files.
-// out_paths must have room for max_count entries. Returns the number of
-// matching files written, or -1 if the directory could not be opened.
 int list_photo_files(const char* dirname, String* out_paths, int max_count);
+
+// Load every photo filename in `dirname` into a PSRAM-backed PhotoIndex.
+// Two passes over the directory: pass 1 records each matching name's length
+// and the true on-card total (never capped by `ceiling`); pass 2 copies the
+// first load_count bare filenames (no leading slash — the consumer adds it)
+// into an exactly-sized PSRAM arena. `reserve_bytes` is subtracted from free
+// PSRAM before sizing so allocations made after this call (display buffers)
+// are not starved. Returns out.count (0 when the card is empty, the budget is
+// exhausted, or a PSRAM allocation fails), or -1 if the directory could not
+// be opened.
+int load_photo_index(const char* dirname, PhotoIndex& out, size_t reserve_bytes, int ceiling);
 
 // Register an LVGL file-system driver for the 'S:' drive backed by SD.
 // Must be called after init_sd_card() and lv_init().
