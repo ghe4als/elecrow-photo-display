@@ -51,6 +51,17 @@ extern void test_weather_all_known_codes(void);
 extern void test_weather_all_codes_non_null(void);
 extern void test_weather_unmapped_codes_unknown(void);
 extern void test_weather_negative_unknown(void);
+extern void test_wrap_index_forward(void);
+extern void test_wrap_index_wraps_past_end(void);
+extern void test_wrap_index_wraps_before_zero(void);
+extern void test_wrap_index_empty_returns_minus_one(void);
+extern void test_photo_at_returns_names(void);
+extern void test_photo_at_out_of_range_is_null(void);
+extern void test_shuffle_offsets_is_permutation(void);
+extern void test_compute_load_count_fits_all(void);
+extern void test_compute_load_count_clamped_by_ceiling(void);
+extern void test_compute_load_count_empty_card(void);
+extern void test_compute_load_count_truncates_exactly(void);
 
 int main(int argc, char** argv) {
     UNITY_BEGIN();
@@ -68,5 +79,16 @@ int main(int argc, char** argv) {
     RUN_TEST(test_weather_all_codes_non_null);
     RUN_TEST(test_weather_unmapped_codes_unknown);
     RUN_TEST(test_weather_negative_unknown);
+    RUN_TEST(test_wrap_index_forward);
+    RUN_TEST(test_wrap_index_wraps_past_end);
+    RUN_TEST(test_wrap_index_wraps_before_zero);
+    RUN_TEST(test_wrap_index_empty_returns_minus_one);
+    RUN_TEST(test_photo_at_returns_names);
+    RUN_TEST(test_photo_at_out_of_range_is_null);
+    RUN_TEST(test_shuffle_offsets_is_permutation);
+    RUN_TEST(test_compute_load_count_fits_all);
+    RUN_TEST(test_compute_load_count_clamped_by_ceiling);
+    RUN_TEST(test_compute_load_count_empty_card);
+    RUN_TEST(test_compute_load_count_truncates_exactly);
     return UNITY_END();
 }
