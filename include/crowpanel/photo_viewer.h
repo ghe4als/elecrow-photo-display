@@ -3,9 +3,13 @@
 #include <Arduino.h>
 #include <lvgl.h>
 
+#include "crowpanel/photo_index.h"
+
 namespace crowpanel {
 
-constexpr int MAX_PHOTOS = 256;
+#ifndef MAX_PHOTOS_CEILING
+constexpr int MAX_PHOTOS_CEILING = 20000;
+#endif
 constexpr uint32_t PHOTO_INTERVAL_MS = 10000;
 
 constexpr int INFO_EVERY_N_PHOTOS = 10;

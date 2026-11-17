@@ -22,8 +22,6 @@ bool sd_ready();
 // Access the mounted SD file system. Check sd_ready() first.
 fs::FS& get_sd_fs();
 
-int list_photo_files(const char* dirname, String* out_paths, int max_count);
-
 // Load every photo filename in `dirname` into a PSRAM-backed PhotoIndex.
 // Two passes over the directory: pass 1 records each matching name's length
 // and the true on-card total (never capped by `ceiling`); pass 2 copies the

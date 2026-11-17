@@ -31,7 +31,7 @@ constexpr uint32_t SWIPE_MAX_DURATION_MS = 500;
 constexpr uint32_t FADE_DURATION_MS = 0;
 constexpr uint32_t FADE_TICK_MS = 16;
 
-String g_photos[MAX_PHOTOS];
+PhotoIndex g_index = {};
 int g_photo_count = 0;
 int g_current_index = 0;
 bool g_paused = false;
@@ -120,10 +120,11 @@ void load_photo_now(int index)
     }
     g_current_index = index;
 
-    const String path = String("S:/photos") + g_photos[index];
+    const String name = photo_at(g_index, index);
+    const String path = String("S:/photos/") + name;
     Serial.printf("[photo] loading %s\n", path.c_str());
 
-    const String raw_path = String("/photos") + g_photos[index].substring(0, g_photos[index].lastIndexOf('.')) + ".raw";
+    const String raw_path = String("/photos/") + name.substring(0, name.lastIndexOf('.')) + ".raw";
     if (load_raw_photo(raw_path.c_str())) {
         Serial.println("[photo] loaded raw RGB565");
         if (g_index_label) {
@@ -386,13 +387,7 @@ void shuffle_photos()
     if (g_photo_count <= 1) {
         return;
     }
-    randomSeed(esp_random());
-    for (int i = g_photo_count - 1; i > 0; --i) {
-        const int j = random(i + 1);
-        const String tmp = g_photos[i];
-        g_photos[i] = g_photos[j];
-        g_photos[j] = tmp;
-    }
+    shuffle_offsets(g_index.offsets, g_index.count, []() -> uint32_t { return esp_random(); });
 }
 
 void advance_photo(int delta)
@@ -477,8 +472,16 @@ void on_release(const lv_indev_t* indev)
 
 bool init_photo_viewer()
 {
-    g_photo_count = list_photo_files("/photos", g_photos, MAX_PHOTOS);
-    Serial.printf("[photo] found %d photo(s) in /photos\n", g_photo_count);
+    uint32_t t0 = millis();
+    g_photo_count = load_photo_index("/photos", g_index, /*reserve_bytes=*/ 3UL * SCREEN_W * SCREEN_H * sizeof(lv_color_t), MAX_PHOTOS_CEILING);
+    Serial.printf("[photo] loaded %d photo(s) in %lu ms\n", g_photo_count, (unsigned long)(millis() - t0));
+
+    if (g_index.count > 0 && g_index.count < g_index.on_card_count) {
+      Serial.printf("[photo] truncated: loaded %d of %d (PSRAM ceiling reached)\n", g_index.count, g_index.on_card_count);
+    }
+    if (g_index.count == 0 && g_index.on_card_count > 0) {
+      Serial.println("[photo] PSRAM allocation failed: cannot load any filenames");
+    }
 
     if (g_photo_count > 0) {
         shuffle_photos();

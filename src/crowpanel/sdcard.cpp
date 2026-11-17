@@ -165,30 +165,6 @@ fs::FS& get_sd_fs()
     return SD;
 }
 
-int list_photo_files(const char* dirname, String* out_paths, int max_count)
-{
-    if (!g_sd_ready) {
-        return -1;
-    }
-    File root = SD.open(dirname);
-    if (!root || !root.isDirectory()) {
-        return -1;
-    }
-    int count = 0;
-    File file = root.openNextFile();
-    while (file && count < max_count) {
-        if (!file.isDirectory()) {
-            const char* name = file.name();
-            if (name[0] != '.' && is_photo_file(name)) {
-                out_paths[count] = String("/") + name;
-                ++count;
-            }
-        }
-        file = root.openNextFile();
-    }
-    return count;
-}
-
 int load_photo_index(const char* dirname, PhotoIndex& out, size_t reserve_bytes, int ceiling)
 {
     out.name_arena = nullptr;
