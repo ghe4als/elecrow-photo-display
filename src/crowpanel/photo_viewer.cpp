@@ -514,10 +514,12 @@ void render_info_card()
     }
 
     if (g_info_condition_label) {
-        lv_label_set_text(g_info_condition_label,
-                          has_weather && weather.condition_text[0] != '\0'
-                              ? weather.condition_text
-                              : "Weather unavailable");
+        const char* condition = has_weather && weather.condition_text[0] != '\0'
+                                    ? weather.condition_text
+                                    : "No weather";
+        char buf[17];
+        snprintf(buf, sizeof(buf), "%.16s", condition);
+        lv_label_set_text(g_info_condition_label, buf);
         place_rotated(g_info_condition_label, 240, 490);
     }
 
@@ -753,7 +755,7 @@ bool init_photo_viewer()
     g_info_date_label = make_card_label(&lv_font_montserrat_24, body_text_color(), "Date unavailable");
     place_rotated(g_info_date_label, 240, 116);
 
-    g_info_clock_label = make_card_label(&lv_font_clock_80, body_text_color(), "--:--");
+    g_info_clock_label = make_card_label(&lv_font_montserrat_40, body_text_color(), "--:--");
     place_rotated(g_info_clock_label, 240, 220);
 
     g_info_weather_icon = lv_obj_create(g_info_overlay);
@@ -790,6 +792,12 @@ bool init_photo_viewer()
     g_info_attribution_label = make_card_label(&lv_font_montserrat_14, muted_text_color(),
                                                "Weather data by Open-Meteo.com (CC BY 4.0)");
     place_rotated(g_info_attribution_label, 240, 750);
+
+    lv_obj_delete(g_info_weather_icon); g_info_weather_icon = nullptr;
+    lv_obj_delete(g_info_divider); g_info_divider = nullptr;
+    lv_obj_delete(g_info_indoor_label); g_info_indoor_label = nullptr;
+    lv_obj_delete(g_info_status_label); g_info_status_label = nullptr;
+    lv_obj_delete(g_info_attribution_label); g_info_attribution_label = nullptr;
 
     g_current_index = -1;
     g_last_advance_ms = millis();

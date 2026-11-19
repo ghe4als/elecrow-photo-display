@@ -82,10 +82,14 @@ uint32_t lvgl_tick()
 /** Present the full RGB frame buffer selected by LovyanGFX. */
 void display_flush(lv_display_t * display, const lv_area_t *, uint8_t * pixel_map)
 {
+    static uint32_t flush_no = 0;
+    ++flush_no;
+    if (flush_no < 6) Serial.printf("[flush] %u begin\n", (unsigned)flush_no);
     // Present the full buffer at VSYNC, then let LVGL render the next frame.
     if (!lcd.bus.presentFrameBuffer(pixel_map)) {
         Serial.println("Display frame switch timeout");
     }
+    if (flush_no < 6) Serial.printf("[flush] %u end\n", (unsigned)flush_no);
     lv_display_flush_ready(display);
 }
 
@@ -95,8 +99,12 @@ void touch_read(lv_indev_t *, lv_indev_data_t * data)
     static int16_t last_x = 0;
     static int16_t last_y = 0;
     static bool was_pressed = false;
+    static uint32_t read_no = 0;
+    if (read_no < 3) Serial.printf("[touch] read %u begin\n", (unsigned)read_no);
     // Preserve the last coordinates while exposing the current press state.
     const bool pressed = touch_read_point(last_x, last_y);
+    if (read_no < 3) Serial.printf("[touch] read %u end\n", (unsigned)read_no);
+    ++read_no;
     data->state = pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     data->point.x = last_x;
     data->point.y = last_y;
@@ -130,10 +138,22 @@ TaskHandle_t ui_task_handle = nullptr;
     crowpanel::init_photo_viewer();
     crowpanel::display_power_init();
 
+    uint32_t loops = 0;
+    uint32_t last_heartbeat = 0;
     for (;;) {
+        if (loops < 3) Serial.printf("[loop] %u pre-lv\n", (unsigned)loops);
         lv_timer_handler();
+        if (loops < 3) Serial.printf("[loop] %u post-lv\n", (unsigned)loops);
         crowpanel::photo_viewer_tick();
+        if (loops < 3) Serial.printf("[loop] %u post-tick\n", (unsigned)loops);
         crowpanel::display_power_tick();
+        if (loops < 3) Serial.printf("[loop] %u post-power\n", (unsigned)loops);
+        ++loops;
+        const uint32_t now = millis();
+        if (now - last_heartbeat >= 1000) {
+            last_heartbeat = now;
+            Serial.printf("[loop] alive t=%u loops=%u\n", (unsigned)now, (unsigned)loops);
+        }
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
@@ -342,7 +362,7 @@ void setup()
     // layers larger than the built-in 64 KB pool; small allocations keep
     // coming from the internal pool first.
     if (psramFound()) {
-        constexpr size_t k_lvgl_psram_pool_size = 1024 * 1024;
+        constexpr size_t k_lvgl_psram_pool_size = 4 * 1024 * 1024;
         void* pool = ps_malloc(k_lvgl_psram_pool_size);
         if (pool) {
             lv_mem_add_pool(pool, k_lvgl_psram_pool_size);

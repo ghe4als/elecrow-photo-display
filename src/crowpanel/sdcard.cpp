@@ -109,8 +109,19 @@ bool init_sd_card()
     SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
     delay(100);
 
-    Serial.printf("[sd] SD.begin(CS=%d)...\n", SD_CS);
-    if (!SD.begin(SD_CS)) {
+    static const uint32_t k_sd_frequencies[] = {4000000, 1000000, 400000};
+    bool mounted = false;
+    for (uint32_t frequency : k_sd_frequencies) {
+        Serial.printf("[sd] SD.begin(CS=%d, %u Hz)...\n", SD_CS, (unsigned)frequency);
+        if (SD.begin(SD_CS, SPI, frequency)) {
+            mounted = true;
+            break;
+        }
+        Serial.println("[sd] mount attempt failed");
+        SD.end();
+        delay(250);
+    }
+    if (!mounted) {
         Serial.println("[sd] SD.begin() failed");
         return false;
     }

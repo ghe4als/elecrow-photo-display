@@ -77,9 +77,16 @@ bool fetch_and_parse(crowpanel::WeatherData& out)
         return false;
     }
 
-    JsonDocument doc;
-    const DeserializationError err = deserializeJson(doc, http.getStream());
+    String body = http.getString();
     http.end();
+    Serial.printf("[weather] body %u bytes: %.100s\n", (unsigned)body.length(), body.c_str());
+    if (body.length() == 0) {
+        Serial.println("[weather] empty response body");
+        return false;
+    }
+
+    JsonDocument doc;
+    const DeserializationError err = deserializeJson(doc, body);
     if (err) {
         Serial.printf("[weather] JSON parse error: %s\n", err.c_str());
         return false;
