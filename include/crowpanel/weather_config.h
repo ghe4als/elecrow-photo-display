@@ -1,9 +1,9 @@
 // Weather location + refresh defaults for the info-screen weather card
 // (Open-Meteo, no API key required).
 //
-// Defaults point at the Vietnam location from the plan so the firmware
-// works out of the box. Every value can be overridden at build time
-// without editing this file:
+// Two named presets ship in this header: HOME and DA_NANG (the default).
+// Select one with -DWEATHER_PRESET=<0|1>, or override latitude/longitude
+// outright at build time without editing this file:
 //
 //   .env (gitignored; injected as -D defines by scripts/load_env.py):
 //       WEATHER_LAT=12.8645066
@@ -27,12 +27,31 @@
 #ifndef WEATHER_CONFIG_H
 #define WEATHER_CONFIG_H
 
+// Named location presets: select with -DWEATHER_PRESET=<n>. The explicit
+// WEATHER_LAT / WEATHER_LON overrides still take precedence over either.
+#define WEATHER_PRESET_HOME 0
+#define WEATHER_PRESET_DA_NANG 1
+
+#ifndef WEATHER_PRESET
+#define WEATHER_PRESET WEATHER_PRESET_DA_NANG
+#endif
+
+#if WEATHER_PRESET == WEATHER_PRESET_HOME
+#define WEATHER_DEFAULT_LAT "12.864506604834714"
+#define WEATHER_DEFAULT_LON "107.97442705894242"
+#elif WEATHER_PRESET == WEATHER_PRESET_DA_NANG
+#define WEATHER_DEFAULT_LAT "16.047199"
+#define WEATHER_DEFAULT_LON "108.206230"
+#else
+#error "WEATHER_PRESET must be WEATHER_PRESET_HOME (0) or WEATHER_PRESET_DA_NANG (1)"
+#endif
+
 #ifndef WEATHER_LAT
-#define WEATHER_LAT "12.864506604834714"
+#define WEATHER_LAT WEATHER_DEFAULT_LAT
 #endif
 
 #ifndef WEATHER_LON
-#define WEATHER_LON "107.97442705894242"
+#define WEATHER_LON WEATHER_DEFAULT_LON
 #endif
 
 #ifndef WEATHER_REFRESH_MIN

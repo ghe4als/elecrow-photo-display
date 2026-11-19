@@ -333,10 +333,9 @@ The card displays:
 
 - Current date, formatted as weekday, month, and day. Before NTP sync the date
   line shows `Date unavailable`.
-- Outdoor weather from Open-Meteo for the default Vietnam location
-  (`12.864506604834714, 107.97442705894242`), shown as temperature in Celsius
-  and a short condition text such as `Clear sky` or `Rain`. No API key is
-  required.
+- Outdoor weather from Open-Meteo for Da Nang, Vietnam (`16.047199, 108.206230`),
+  shown as temperature in Celsius and a short condition text such as `Clear sky`
+  or `Rain`. No API key is required.
 - Indoor temperature and humidity from the DHT20 sensor on the I2C bus. If the
   sensor is missing or a read fails, the card shows `Indoor sensor offline`.
 
@@ -353,14 +352,28 @@ LVGL stutter.
 
 ### Configuring the weather location
 
-The default location is hardcoded in `include/crowpanel/weather_config.h` as the
-Vietnam coordinates above. Override it at build time without editing the header.
+Two named presets live in `include/crowpanel/weather_config.h`:
+
+| Preset | Coordinates | Default |
+|---|---|---|
+| Da Nang, Vietnam | `16.047199, 108.206230` | yes |
+| Home | `12.864506604834714, 107.97442705894242` | no |
+
+Switch between them with a numeric build flag:
+
+```sh
+pio run -e crowpanel-5 -- -DWEATHER_PRESET=1    # Da Nang
+pio run -e crowpanel-5 -- -DWEATHER_PRESET=0    # home
+```
+
+For any other place, override the coordinates directly; they take precedence
+over the preset.
 
 Via `.env` (gitignored, parsed by `scripts/load_env.py`):
 
 ```sh
-WEATHER_LAT="12.8645066"
-WEATHER_LON="107.9744271"
+WEATHER_LAT="16.047199"
+WEATHER_LON="108.206230"
 ```
 
 `WEATHER_LAT` and `WEATHER_LON` must be supplied as quoted strings because they
@@ -375,7 +388,7 @@ pio run -e crowpanel-5 -- -DWEATHER_REFRESH_MIN=90
 You can also pass latitude and longitude on the command line:
 
 ```sh
-pio run -e crowpanel-5 -- -DWEATHER_LAT='"12.8645066"' -DWEATHER_LON='"107.9744271"' -DWEATHER_REFRESH_MIN=90
+pio run -e crowpanel-5 -- -DWEATHER_LAT='"16.047199"' -DWEATHER_LON='"108.206230"' -DWEATHER_REFRESH_MIN=90
 ```
 
 If weather data is missing or WiFi is offline, the card shows
