@@ -6,6 +6,8 @@
 /* DHT20 uses address 0x38 and a short command/read conversion sequence. */
 namespace {
 constexpr uint8_t dht20_address = 0x38;
+constexpr int dht20_init_attempts = 5;
+constexpr uint32_t dht20_init_retry_delay_ms = 100;
 
 /** Send one DHT20 command and report the I2C acknowledgement. */
 bool write_command(const uint8_t * command, size_t size)
@@ -30,25 +32,39 @@ bool read_bytes(uint8_t * data, size_t size)
 
 /**
  * @brief Check the DHT20 status and issue calibration when required.
+ *
+ * On a cold power-on the board and sensor come up together, so the first
+ * status read can land before the module is ready. Retry briefly rather than
+ * latching the sensor offline for the whole session; a reset boots the sensor
+ * already powered, which is why that path used to succeed where power-on did
+ * not.
+ *
  * @return true when the sensor acknowledges initialization.
  */
 bool dht20_init()
 {
-    delay(100);
-    const uint8_t status_command = 0x71;
-    uint8_t status = 0;
-    if (!write_command(&status_command, 1) || !read_bytes(&status, 1)) {
-        return false;
-    }
+    for (int attempt = 0; attempt < dht20_init_attempts; ++attempt) {
+        delay(attempt == 0 ? 100 : dht20_init_retry_delay_ms);
 
-    if (!(status & 0x08)) {
-        const uint8_t init_command[] = {0xBE, 0x08, 0x00};
-        if (!write_command(init_command, sizeof(init_command))) {
-            return false;
+        const uint8_t status_command = 0x71;
+        uint8_t status = 0;
+        if (!write_command(&status_command, 1) || !read_bytes(&status, 1)) {
+            if (attempt + 1 < dht20_init_attempts) {
+                Serial.printf("[dht20] probe retry %d\n", attempt + 1);
+            }
+            continue;
         }
-        delay(10);
+
+        if (!(status & 0x08)) {
+            const uint8_t init_command[] = {0xBE, 0x08, 0x00};
+            if (!write_command(init_command, sizeof(init_command))) {
+                continue;
+            }
+            delay(10);
+        }
+        return true;
     }
-    return true;
+    return false;
 }
 
 /**
