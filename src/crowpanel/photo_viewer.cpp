@@ -322,7 +322,7 @@ void render_info_card()
     if (photo_viewer_get_indoor_climate(climate)) {
         snprintf(climate_buf, sizeof(climate_buf), "Indoor: %dC, %d%%", climate.temperature_c, climate.humidity_pct);
     } else {
-        strlcpy(climate_buf, "Indoor: 24C, 55%", sizeof(climate_buf));
+        strlcpy(climate_buf, "Indoor sensor offline", sizeof(climate_buf));
     }
     draw_card_label(&layer, climate_buf, 380, &lv_font_montserrat_24);
 
